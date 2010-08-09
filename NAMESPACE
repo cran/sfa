@@ -1,0 +1,18 @@
+export(sfa)
+export(dgp)
+export(eff)
+export(u.sfa)
+export(te.eff.sfa)
+
+S3method(coef, sfa)
+S3method(print, sfa)
+S3method(predict, sfa)
+S3method(fitted, sfa)
+S3method(logLik, sfa)
+S3method(residuals, sfa)
+S3method(summary, sfa)
+S3method(print, summary.sfa)
+S3method(eff, sfa)
+
+
+
