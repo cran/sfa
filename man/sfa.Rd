@@ -8,7 +8,8 @@ Fitting stochastic frontier analysis models
 \code{sfa} is used to fit stochastic frontier analysis models.
 }
 \usage{
-sfa(formula, data = NULL, intercept = TRUE, fun = "hnormal", pars = NULL, par_mu = NULL, form = "cost", method = "BFGS", ...)
+sfa(formula, data = NULL, intercept = TRUE, fun = "hnormal",
+pars = NULL, par_mu = NULL, form = "cost", method = "BFGS", ...)
 }
 \arguments{
   \item{formula}{

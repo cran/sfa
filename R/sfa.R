@@ -118,7 +118,11 @@ if (is.null(pars)) {
                 sigmav2 = coef[names(coef) == "sigmav2"], coef = coef, mu = mu,
                 logLik = LogLik, maxlik = maxlik, fun = fun, sc = sc, hess = mod$hessian,
                 ols = ols, par_mu = par_mu)
-
+if(is.null(mu)){ret <- list(y = y, x = x, X = X, sigmau2 = coef[names(coef) == "sigmau2"],
+				sigmav2 = coef[names(coef) == "sigmav2"], coef = coef,
+				logLik = LogLik, maxlik = maxlik, fun = fun, sc = sc, hess = mod$hessian,
+				ols = ols, par_mu = par_mu)
+	}
     # Klasse von ret festlegen und returnieren
     class(ret) <- "sfa"
     return(ret)
@@ -142,7 +146,7 @@ sfa <- function(formula, data = NULL, intercept = TRUE, fun = "hnormal", pars = 
     if(length(y) != nrow(x)) stop("x and y lengths differ")
 
     # Weitergabe der vorbereiteten Angaben an sfa.fit
-    sfa.fit(y = y, x = x, intercept = intercept, fun = fun, pars = pars, par_mu = par_mu, mu = mu, form = form, method = method)
+    sfa.fit(y = y, x = x, intercept = intercept, fun = fun, pars = pars, par_mu = par_mu, form = form, method = method)
 }
 
 

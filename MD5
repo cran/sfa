@@ -1,0 +1,13 @@
+480fd198f50a9a2583b7c1f086a32282 *DESCRIPTION
+99e794c4ea92f26fddc72fc1da5d6c0a *NAMESPACE
+92d9e63ba7669324a9695ec90fd96a06 *R/dgp.R
+46b06faff3133edacc5baea7a64f08fa *R/methods.R
+38346be7d0def7f5a2bb7e1e58d5192e *R/sfa.R
+7f38999520ecf90b5d519cebd0d910a7 *man/dgp.Rd
+e45351a8fb441db59f982af6e586a2da *man/eff.Rd
+b073e1a19b9bccda5886201fc4fc4c67 *man/logLiks.Rd
+a140a7601171f5b18515bff25adaff33 *man/methods.Rd
+69f831bdf3d34068a9b806d89bd8053c *man/sfa-package.Rd
+e4cc2df8a3b0db9e254d87e26adbee26 *man/sfa.Rd
+490739c645db1fdf03b952ab248f579e *man/te.eff.sfa.Rd
+b56be396d5b98c5bd3b0b07da5f9db65 *man/u.sfa.Rd

@@ -36,6 +36,6 @@ as introduced by Aigner et al. (1977) and Battese and Coelli (1992, 1995).
 Ariane Straub
 \cr
 under the supervision of Torsten Hothorn
-<Ariane.Straub@campus.lmu.de> (package maintainer).
+<Ariane.Straub@gmail.com> (package maintainer).
 }
 \keyword{ package }
