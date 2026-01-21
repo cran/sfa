@@ -1,0 +1,62 @@
+---
+title: "Introduction to psfm"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{introduction to psfm}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+## Load Package 
+First let us load the sfa package.
+
+```{r setup 1}
+library(sfa)
+```
+
+## Generalized True Random Effects Model
+Next we are interested in estimating the Generalized True Random Effects Model (GTRE) model of Filippini Greene (2016) using simulated maximum likelihood.  We will begin by using a simulated data set.  We use the "data_gen_p" call to create a simulated data set.  The psfm call runs the likelihood through three successive optimizer rountines, only updating the parameter values if there is an improvement in the likelihood.  We have opted for 100 iterations of the "bobyqa" procedure, 8 for "psoptim", and 8 for "optim".  "rand" signifies the seed, using set.seed() for replication.  Other variables are for the sigmas and betas in the model, with cons for beta0/constant.             
+
+```{r setup 2}
+data_trial <- data_gen_p(t=10,N=100,rand = 16, sig_u = 0.3,sig_v = 0.1, sig_r = 0.1, sig_h = 0.3, cons = 0.5, beta1 = 0.5, beta2 = 0.5)
+
+p.gtre_sml   <- psfm(formula      = y_gtre ~ x1 + x2,       
+                     model_name   = "GTRE",
+                     data         = data_trial,           
+                     individual   = "name",
+                     PSopt        = TRUE,
+                     optHessian   = TRUE,
+                     maxit.bobyqa = 150,
+                     maxit.psoptim= 10,
+                     maxit.optim  = 10)
+summary(p.gtre_sml)
+mean(p.gtre_sml$U)
+mean(p.gtre_sml$H)
+```
+
+## GTRE Results 
+The results give the model parameter estimates in the classic $\lambda$-$\sigma$ framework as well as the mean efficiency scores.  We see that most parameters are estimated quite well, with large t-values.  For example, $\hat \lambda = 3.14$ while the true $\lambda = 0.3/0.1=3$.  The optimization struggled a bit with $\sigma_r$=sig_r, which is reflected in the less accurate parameter and lower t-value.  Increasing the number of iterations in the optimization procedure typically improves accuracy, but will increase the run time.   We also see that the mean persistent technical efficiency is 0.75 and the mean transient technical efficiency is 0.80.  
+
+We may be interested in plotting the densities of these efficiency scores: 
+
+```{r setup 3}
+plot(density(p.gtre_sml$U),main="Density of Transient TE")
+plot(density(p.gtre_sml$H),main="Density of Persistent TE")
+```
+
+To get the total technical efficiency, we would simply multiply the TE's of U and H in the following way: 
+
+```{r setup 4}
+total_te <- rep(p.gtre_sml$H, each=10) * p.gtre_sml$U
+plot(density(total_te),main="Density of Total TE")
+```
+
+NB: Using the constant 10 in rep(p.gtre_sml$H, each=10) only works for a balanced panel with t=10 for each individual. For an unbalanced panel, the each argument in rep would not work.  Instead, use the times argument and a vector of length N (number of individuals), with each of the time period lengths, e.g. rep(c(2,5),times=c(5,2)).  
+
