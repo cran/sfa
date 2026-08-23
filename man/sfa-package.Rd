@@ -7,7 +7,11 @@
 \packageDESCRIPTION{sfa}
 \packageIndices{sfa}}
 \keyword{package}
-\seealso{\code{http://www.davidharrybernstein.com/software}}
+\seealso{
+  \url{https://www.davidharrybernstein.com/software}
+
+  \url{https://github.com/davidhbernstein/sfa}
+}
 \examples{
 \donttest{
 ## Simple application of the generalized true random effects estimator.

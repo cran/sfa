@@ -9,8 +9,8 @@ bibentry(bibtype = "Article",
          year         = "2026",
          
          textVersion = 
-         paste("David H. Bernstein, Christopher F. Parmeter, and Alexander D Stead (2026).", 
-               "Stochastic Froniter Analysis: The sfa Package.",
+         paste("David H. Bernstein, Christopher F. Parmeter, and Alexander D Stead (2026).",
+               "Stochastic Frontier Analysis: The sfa Package.",
                "Working Paper.")
 )
 

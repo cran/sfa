@@ -14,25 +14,80 @@ knitr::opts_chunk$set(
 )
 ```
 
-## Load Package 
+## Load Package
+
 First let us load the sfa package.
 
-```{r setup 1}
+```{r setup1}
 library(sfa)
 ```
 
+## Which panel model? An overview of `psfm()`
+
+`psfm()` is the panel-data entry point of the sfa package (`sfm()`,
+`zsfm()`, and `ttsfm()` are its cross-sectional counterparts -- see their
+own help pages, `?sfm`/`?zsfm`/`?ttsfm`). It fits one of eleven
+`model_name` choices, selected via the `model_name` argument:
+
+| `model_name` | Individual effect | Estimator | Notes |
+|---|---|---|---|
+| `"TRE"` | random | simulated ML (Halton draws) | homoskedastic $\sigma_u$ |
+| `"TRE_Z"` | random | simulated ML | $\sigma_u$ a function of covariates (1 pipe) |
+| `"GTRE"` | random, persistent + transient | simulated ML | homoskedastic $\sigma_u$, $\sigma_h$ |
+| `"GTRE_Z"` | random, persistent + transient | simulated ML | $\sigma_u$, $\sigma_h$ both covariate-driven (2 pipes) |
+| `"TFE"` | fixed | ML (Chen, Schmidt & Wang 2014) | no separate noise-vs-effect random draw for $r_i$ |
+| `"FD"` | random, persistent | first-differenced GLS (Wang & Ho 2010) | $\sigma_u$ time-invariant, scaled by covariates (1 pipe) |
+| `"GTRE_SEQ1"`, `"GTRE_SEQ2"` | random | sequential moment-based | fast, but not maximum likelihood |
+| `"SSFE"` | fixed | LSDV (Schmidt & Sickles 1984) | deterministic, no optimizer |
+| `"PL80"` | random, persistent | wraps `frontier::sfa()` | Pitt & Lee (1980) |
+| `"BC92"` | random, time-varying | wraps `frontier::sfa()` | Battese & Coelli (1992) |
+
+Every model shares the same `formula`/`data`/`individual` calling
+convention, so switching between them is usually just a change of
+`model_name` (and, for the `_Z`/`FD` models, adding the relevant formula
+pipe -- see "Heteroskedastic inefficiency" below). This vignette walks
+through the most commonly used model, `GTRE`, in full, then shows the
+heteroskedastic (`GTRE_Z`) variant and the parametric bootstrap. See
+`?psfm` and each model's own documentation (e.g. `?data_gen_p`, which lists
+every DGP column and which model it targets) for the rest.
+
 ## Generalized True Random Effects Model
-Next we are interested in estimating the Generalized True Random Effects Model (GTRE) model of Filippini Greene (2016) using simulated maximum likelihood.  We will begin by using a simulated data set.  We use the "data_gen_p" call to create a simulated data set.  The psfm call runs the likelihood through three successive optimizer rountines, only updating the parameter values if there is an improvement in the likelihood.  We have opted for 100 iterations of the "bobyqa" procedure, 8 for "psoptim", and 8 for "optim".  "rand" signifies the seed, using set.seed() for replication.  Other variables are for the sigmas and betas in the model, with cons for beta0/constant.             
 
-```{r setup 2}
-data_trial <- data_gen_p(t=10,N=100,rand = 16, sig_u = 0.3,sig_v = 0.1, sig_r = 0.1, sig_h = 0.3, cons = 0.5, beta1 = 0.5, beta2 = 0.5)
+We are interested in estimating the Generalized True Random Effects Model
+(GTRE) model of Filippini and Greene (2016) using simulated maximum
+likelihood. We will begin by using a simulated data set. We use the
+`data_gen_p` call to create a simulated data set. The `psfm` call runs the
+likelihood through three successive optimizer routines, only updating the
+parameter values if there is an improvement in the likelihood. We have
+opted for 150 iterations of the "bobyqa" procedure, 10 for "psoptim", and 10
+for "optim". `rand` sets the seed (via `set.seed()`) for replication. Other
+arguments set the true $\sigma$'s and $\beta$'s used to generate the data,
+with `cons` for $\beta_0$/the constant. `rand.gtre` and `rand.psoptim` seed
+the simulated-ML Halton draws and the particle-swarm stage respectively;
+without them a model fit with `PSopt = TRUE` is not reproducible from one
+session to the next, which is why every fit below sets them.
 
-p.gtre_sml   <- psfm(formula      = y_gtre ~ x1 + x2,       
+Every fit in this vignette is deliberately sized to build quickly rather
+than to be a serious estimation exercise: a 70-firm, 6-period panel, only
+50 Halton draws (`halton_num`), and a handful of optimizer iterations. Real
+work should use a genuine panel and the defaults -- `halton_num` alone
+defaults to `ceiling(sqrt(nrow(data))) + 100`, several times what is used
+here. Expect the numbers below to move if you rerun them at a realistic
+size.
+
+```{r setup2}
+data_trial <- data_gen_p(t=6, N=70, rand = 16, sig_u = 0.3, sig_v = 0.1, sig_r = 0.1, sig_h = 0.3, cons = 0.5, beta1 = 0.5, beta2 = 0.5)
+
+p.gtre_sml   <- psfm(formula      = y_gtre ~ x1 + x2,
                      model_name   = "GTRE",
-                     data         = data_trial,           
+                     estimator    = "sml",
+                     data         = data_trial,
                      individual   = "name",
                      PSopt        = TRUE,
                      optHessian   = TRUE,
+                     halton_num   = 50,
+                     rand.gtre    = 1,
+                     rand.psoptim = 1,
                      maxit.bobyqa = 150,
                      maxit.psoptim= 10,
                      maxit.optim  = 10)
@@ -41,22 +96,171 @@ mean(p.gtre_sml$U)
 mean(p.gtre_sml$H)
 ```
 
-## GTRE Results 
-The results give the model parameter estimates in the classic $\lambda$-$\sigma$ framework as well as the mean efficiency scores.  We see that most parameters are estimated quite well, with large t-values.  For example, $\hat \lambda = 3.14$ while the true $\lambda = 0.3/0.1=3$.  The optimization struggled a bit with $\sigma_r$=sig_r, which is reflected in the less accurate parameter and lower t-value.  Increasing the number of iterations in the optimization procedure typically improves accuracy, but will increase the run time.   We also see that the mean persistent technical efficiency is 0.75 and the mean transient technical efficiency is 0.80.  
+## GTRE Results
 
-We may be interested in plotting the densities of these efficiency scores: 
+The results give the model parameter estimates in the classic
+$\lambda$-$\sigma$ framework as well as the mean efficiency scores. We see
+that most parameters are estimated well: $\hat\lambda \approx 2.7$ against a
+true $\lambda = \sigma_u/\sigma_v = 0.3/0.1 = 3$. The optimizer struggles
+more with $\sigma_r$ specifically -- its estimate (about 0.06) sits below
+the true value of 0.1, with a $t$-value near 2.2 against 40 and 49 for
+$\beta_1$ and $\beta_2$. The persistent random effect is the component a
+short panel speaks least clearly about, and on a panel this small it is the
+estimate to treat with the most caution: at other seeds it can collapse
+toward zero altogether. $\sigma_h$ comes out somewhat above its true value
+(0.40 against 0.3), while $\beta_0$, $\beta_1$, and $\beta_2$ are all close
+to their true values with large $t$-values. Increasing the number of optimizer iterations (via
+`maxit.bobyqa`/`maxit.psoptim`/`maxit.optim`) typically improves accuracy at
+the cost of run time; for `GTRE`/`GTRE_Z`/`TRE`/`TRE_Z`, which use simulated
+ML over Halton draws, each objective-function evaluation is meaningfully
+more expensive than in the closed-form cross-sectional models, so this
+trade-off is worth tuning to your own patience/hardware rather than
+increasing iterations blindly. We also see that the mean transient
+technical efficiency (`U`) is around 0.81 and the mean persistent technical
+efficiency (`H`) is around 0.76.
 
-```{r setup 3}
+We may be interested in plotting the densities of these efficiency scores:
+
+```{r setup3}
 plot(density(p.gtre_sml$U),main="Density of Transient TE")
 plot(density(p.gtre_sml$H),main="Density of Persistent TE")
 ```
 
-To get the total technical efficiency, we would simply multiply the TE's of U and H in the following way: 
+To get the total technical efficiency, we would simply multiply the TE's of
+U and H in the following way:
 
-```{r setup 4}
-total_te <- rep(p.gtre_sml$H, each=10) * p.gtre_sml$U
+```{r setup4}
+total_te <- rep(p.gtre_sml$H, each=6) * p.gtre_sml$U
 plot(density(total_te),main="Density of Total TE")
 ```
 
-NB: Using the constant 10 in rep(p.gtre_sml$H, each=10) only works for a balanced panel with t=10 for each individual. For an unbalanced panel, the each argument in rep would not work.  Instead, use the times argument and a vector of length N (number of individuals), with each of the time period lengths, e.g. rep(c(2,5),times=c(5,2)).  
+NB: Using the constant 6 in rep(p.gtre_sml$H, each=6) only works for a
+balanced panel with t=6 for each individual. For an unbalanced panel, the
+each argument in rep would not work. Instead, use the times argument and a
+vector of length N (number of individuals), with each of the time period
+lengths, e.g. rep(c(2,5),times=c(5,2)).
 
+## Extracting results: standard R modeling generics
+
+`psfm()` (like `sfm()`, `zsfm()`, and `ttsfm()`) returns an object of class
+`"sfareg"`, which supports the usual R modeling generics rather than
+requiring you to reach into `$out` by hand:
+
+```{r setup5}
+coef(p.gtre_sml)                 # named vector of point estimates
+vcov(p.gtre_sml)                 # variance-covariance matrix (from the Hessian)
+logLik(p.gtre_sml)               # log-likelihood, with df/nobs attributes set
+AIC(p.gtre_sml); BIC(p.gtre_sml) # available "for free" once logLik() works
+```
+
+`logLik()` (and therefore `AIC()`/`BIC()`) returns `NA` with a warning for
+the moment-based/LSDV models (`GTRE_SEQ1`, `GTRE_SEQ2`, `SSFE`), since those
+aren't fit by maximizing a likelihood in the first place.
+
+## Heteroskedastic inefficiency: the pipe formula and `GTRE_Z`
+
+The models above assume homoskedastic inefficiency -- a single $\sigma_u$
+(and, for GTRE, $\sigma_h$) shared by every observation. `psfm()`'s `_Z`
+models instead let $\sigma_u$ (and, for `GTRE_Z`, $\sigma_h$) depend on
+covariates, via a formula with one or two extra parts separated by `|`:
+`y ~ x1 + x2 | z_u | z_h`. The first part is the usual frontier equation;
+the second parameterizes $\sigma_u$; the third (only for `GTRE_Z`)
+parameterizes $\sigma_h$. `GTRE` and `TRE` (no `_Z` suffix) do not accept
+any pipes -- if you want covariate-driven inefficiency, use `GTRE_Z`/`TRE_Z`
+and name them explicitly (an older version of this package let a pipe on
+`model_name = "GTRE"` silently upgrade to `GTRE_Z`; this package now
+requires the `_Z` name to be written explicitly instead, so it's always
+clear from the call itself which model was fit).
+
+```{r setup6}
+## data_trial already holds every column data_gen_p() produces, including the
+## y_gtre_zz/z_gtre/zp_gtre trio this model needs -- no need to simulate again.
+p.gtre_z <- psfm(formula      = y_gtre_zz ~ x1 + x2 | z_gtre | zp_gtre,
+                 model_name   = "GTRE_Z",
+                 data         = data_trial,
+                 individual   = "name",
+                 PSopt        = TRUE,
+                 optHessian   = TRUE,
+                 halton_num   = 50,
+                 rand.gtre    = 1,
+                 rand.psoptim = 1,
+                 maxit.bobyqa = 150,
+                 maxit.psoptim= 10,
+                 maxit.optim  = 10)
+summary(p.gtre_z)
+```
+
+Note the coefficient layout: `sigv`, `sigr`, the frontier ($x$) block, then
+the $\sigma_u$ block (its own intercept plus `z_gtre`), then the $\sigma_h$
+block (its own intercept plus `zp_gtre`) -- each pipe segment gets its own
+intercept, which is why `(Intercept x)`/`(Intercept u)`/`(Intercept h)` are
+labeled separately rather than sharing one `(Intercept)` row. This
+`GTRE_Z`/`TRE_Z` link function is $\sigma = \sqrt{\exp(z'\delta)}$ ($\delta$
+parameterizes the *variance*, not the standard deviation) -- a genuine,
+existing difference from `sfm()`'s `NHN_Z`/`NE_Z`, which use
+$\sigma = \exp(z'\delta)$ directly. Check which convention applies before
+interpreting a fitted $z$-coefficient.
+
+## Parametric bootstrap for inference: `psfm_bootstrap()`
+
+The Hessian-based standard errors above rely on standard asymptotic MLE
+theory. `psfm_bootstrap()` offers a parametric-bootstrap alternative:
+starting from a fitted model, it repeatedly (a) simulates a new response
+from the fitted parameters (using each model's own assumed data-generating
+process), (b) re-estimates the same model on the simulated data, and (c)
+uses the spread of those re-estimates as the standard error. This is
+supported for every maximum-likelihood model above except the
+`frontier::sfa()`-wrapped ones (`PL80`, `BC92`): `GTRE_Z`, `TRE_Z`, `GTRE`,
+`TRE`, `TFE`, and `FD`.
+
+```{r setup7}
+data_trial_tre <- data_gen_p(t=5, N=30, rand=16, sig_u=0.3, sig_v=0.1, sig_r=0.1, sig_h=0.3,
+                             cons=0.5, beta1=0.5, beta2=0.5)
+
+p.tre <- psfm(formula = y_tre ~ x1 + x2, model_name = "TRE",
+              data = data_trial_tre, individual = "name",
+              halton_num = 50, rand.gtre = 1, maxit.bobyqa = 300)
+
+set.seed(1)
+boot <- psfm_bootstrap(p.tre,
+                       numCores      = 2,
+                       BOOT          = 5,    # a real analysis should use far more, e.g. 199-999
+                       individual    = "name",
+                       inefdec       = TRUE,
+                       maxit.bobyqa  = 150,
+                       maxit.psoptim = 30)
+boot$se                    # bootstrap standard errors, one per parameter in coef(p.tre)
+boot$model$out             # a copy of p.tre$out with bootstrap SEs/t-values written in
+```
+
+`BOOT = 5` above is only for a fast-building vignette -- a real analysis
+should use at least 199, and ideally more, replications. Five is far too
+few to read the standard errors below as anything but a demonstration of
+the calling convention. Each replication refits the full model, so runtime
+scales roughly linearly with `BOOT` (parallelized across `numCores`); note
+that the refits use the model's default Halton draw count rather than the
+reduced `halton_num` of the original fit. See `?psfm_bootstrap` for the full
+per-model data-generating process assumptions, and for `boot_eff`/
+`boot_eff_h` (bootstrap draws of the technical-efficiency scores
+themselves, not just the parameters).
+
+## Practical tips
+
+- **`inefdec`**: `TRUE` (default) fits a production-frontier model
+  (inefficiency lowers output, $y = x'\beta + v - u$); `FALSE` fits a
+  cost-frontier model (inefficiency raises cost, $y = x'\beta + v + u$).
+  Make sure this matches how your outcome variable is defined.
+- **`PSopt`**: enables the middle (`psoptim`, particle-swarm) optimization
+  stage. It can help escape a poor starting point, but its wide,
+  undirected search can occasionally land on a degenerate solution (e.g. a
+  variance component collapsing toward its numerical floor) that the
+  default two-stage (`bobyqa` then `optim`) path would not have found. If a
+  fit's standard errors look implausible (e.g. far larger than the point
+  estimate, or a variance parameter near zero), try refitting with
+  `PSopt = FALSE` before concluding the model doesn't fit the data.
+- **Pipe counts are enforced per model**: `psfm()` checks the formula's
+  pipe count against what the requested `model_name` actually supports (see
+  the table above) and stops with a clear error if they don't match, rather
+  than silently ignoring extra pipes or extra covariates.
+- **`individual`**: the panel ID column name (a character string, e.g.
+  `"name"` above), required by every model in this vignette.

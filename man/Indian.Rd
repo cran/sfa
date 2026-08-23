@@ -2,7 +2,7 @@
 \alias{Indian}
 \docType{data}
 \title{Indian}
-\description{Panel data on 14 paddy farmers from Aurepalle, India, collected over ten years (1975-76 to 1984-85). Includes farmer characteristics (age, schooling) and production variables (output, land, labor, bullocks, input costs).}
+\description{Panel data on 34 paddy farmers from Aurepalle, India, collected over ten years (1975-76 to 1984-85). The panel is unbalanced: farmers are observed between 2 and 10 times. Includes farmer characteristics (age, schooling) and production variables (output, land, labor, bullocks, input costs).}
 \usage{data("Indian")}
 \format{
   A data frame with 273 observations (an unbalanced panel of 34 farmers over 10 years) on the following 10 variables.
