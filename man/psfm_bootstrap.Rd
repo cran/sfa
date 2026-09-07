@@ -4,7 +4,7 @@
 \description{
 Performs a parametric bootstrap for panel stochastic frontier models fit with
 \code{\link[sfa]{psfm}}. Supports \code{model_name \%in\% c("GTRE_Z", "TRE_Z",
-"GTRE", "TRE", "TFE", "FD")} -- every \code{psfm()} model except the
+"GTRE", "GTRE_FML", "TRE", "TFE", "FD")} -- every \code{psfm()} model except the
 moment-based/LSDV estimators (\code{"GTRE_SEQ1"}, \code{"GTRE_SEQ2"},
 \code{"SSFE"}, which are not maximum-likelihood and have no \code{$opt} to
 bootstrap around in the same sense) and the \code{\link[frontier]{sfa}}-wrapped
@@ -37,11 +37,14 @@ psfm_bootstrap(psfm_object,
 \arguments{
   \item{psfm_object}{A fitted model object of class \code{"sfareg"} returned by
     \code{\link[sfa]{psfm}}, with \code{model_name \%in\% c("GTRE_Z", "TRE_Z",
-    "GTRE", "TRE", "TFE", "FD")}. Must contain \code{$out}, \code{$data},
-    \code{$formula}, and \code{$model_name}; \code{$H} is additionally
-    required for \code{"GTRE"}/\code{"GTRE_Z"} (the only two models that
-    return it) and \code{$r_hat_m} is additionally required for
-    \code{"TFE"}.}
+    "GTRE", "GTRE_FML", "TRE", "TFE", "FD")}. Note that
+    \code{psfm(model_name = "GTRE")} returns \code{model_name = "GTRE_FML"}
+    under its default \code{estimator = "fiml"}, which is why that value is
+    supported here rather than only \code{"GTRE"}. Must contain \code{$out},
+    \code{$data}, \code{$formula}, and \code{$model_name}; \code{$H} is
+    additionally required for \code{"GTRE"}/\code{"GTRE_FML"}/\code{"GTRE_Z"}
+    (the only models that return it) and \code{$r_hat_m} is additionally
+    required for \code{"TFE"}.}
   \item{numCores}{Integer. Number of cores for the parallel cluster created
     internally via \code{\link[parallel]{makeCluster}}.}
   \item{BOOT}{Integer. Number of bootstrap replications (e.g. 199, 399, 999).}
@@ -65,7 +68,8 @@ psfm_bootstrap(psfm_object,
         \code{h}-covariates -- used automatically for \code{"GTRE_Z"}.}
       \item{\code{"auto"}}{(Default) Resolves per \code{model_name}:
         \code{"parametric"} for \code{"GTRE_Z"}, \code{"scalar"} for bare
-        \code{"GTRE"}, \code{"none"} for \code{"TRE_Z"}/\code{"TRE"}.}
+        \code{"GTRE"} and \code{"GTRE_FML"}, \code{"none"} for
+        \code{"TRE_Z"}/\code{"TRE"}.}
     }
   }
   \item{maxit.psoptim}{Integer. Passed through to \code{psfm()} as
@@ -188,7 +192,7 @@ A list with components:
     but always collected into this same \code{boot_eff} matrix here). Rows
     corresponding to failed replications are \code{NA}.}
   \item{boot_eff_h}{Only non-\code{NULL} for \code{model_name \%in\%
-    c("GTRE", "GTRE_Z")} (the only two models that return \code{$H} at all);
+    c("GTRE", "GTRE_FML", "GTRE_Z")} (the only models that return \code{$H} at all);
     \code{NULL} otherwise. A \code{BOOT} x \code{length(psfm_object$H)}
     matrix of bootstrapped time-invariant, individual-specific
     inefficiency-score (\code{$H}) draws -- one column per unique individual

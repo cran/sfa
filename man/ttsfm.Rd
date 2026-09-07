@@ -3,7 +3,8 @@
 \title{Two-Tier Stochastic Frontier Model}
 \description{Code to estimate the two-tier stochastic frontier model (2TSF), which decomposes a symmetric error term into two one-sided components (e.g. buyer/seller informational rents) in addition to the usual two-sided noise term.}
 \usage{ttsfm(formula, model_name = c("TTNE", "TTHN", "TTNLS"),
-data, maxit.bobyqa = 80000, maxit.psoptim = 1000, maxit.optim = 1000,
+data, z_link = c("sd", "var"), maxit.bobyqa = 80000,
+maxit.psoptim = 1000, maxit.optim = 1000,
 REPORT = 1, trace = 0, pgtol = 0, start_val = FALSE, PSopt = FALSE,
 optHessian = TRUE, inefdec = TRUE, upper = NA,
 Method = "L-BFGS-B", logit = TRUE, verbose = FALSE, rand.psoptim = NULL)}
@@ -11,6 +12,7 @@ Method = "L-BFGS-B", logit = TRUE, verbose = FALSE, rand.psoptim = NULL)}
 \item{formula}{a symbolic description for the model to be estimated. Use \code{y ~ x | zu | zw} to allow determinants \code{zu} of the first one-sided component and \code{zw} of the second.}
 \item{model_name}{model name for the estimation: \code{"TTNE"} for the Normal-Exponential-Exponential two-tier model, \code{"TTHN"} for the Normal-Half Normal-Half Normal two-tier model, or \code{"TTNLS"} for a nonlinear-least-squares two-tier estimator with no distributional assumption on \code{u}/\code{w} beyond their means. Matching ignores case, so \code{"nhn"}, \code{"NHN"} and \code{"Nhn"} are the same choice.}
 \item{data}{A data frame containing the variables named in \code{formula}.}
+\item{z_link}{Scale on which the variance-determinant linear predictors are placed. \code{"sd"} (the default, and \code{ttsfm}'s historical convention) sets \eqn{\sigma_u = \exp(z_u'\delta)} and likewise for \eqn{\sigma_w}; \code{"var"} sets \eqn{\sigma_u = \sqrt{\exp(z_u'\delta)}}, matching \code{\link{psfm}} and the competing packages. The two are reparameterizations of the same model -- identical maximised log-likelihood and identical frontier coefficients -- but \eqn{\delta} under the SD link is exactly \bold{half} \eqn{\delta} under the variance link, so a \eqn{\delta} from \code{ttsfm} is not comparable with one from \code{psfm} or \pkg{sfaR} unless the same convention is used. See \code{\link{sfm}}, which gained the same argument.}
 \item{maxit.bobyqa}{Maximum number of iterations for the bobyqa optimization routine}
 \item{maxit.psoptim}{Maximum number of iterations for the psoptim optimization routine}
 \item{maxit.optim}{Maximum number of iterations for the optim optimization routine}

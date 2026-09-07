@@ -1,4 +1,4 @@
-export(zsfm, psfm, sfm, ttsfm, npsfm, sfa_diagnostics, data_gen_p, data_gen_cs, summary.sfareg, print.sfareg, psfm_bootstrap)
+export(zsfm, lcsfm, selsfm, ivsfm, copsfm, psfm, sfm, ttsfm, npsfm, sfa_diagnostics, efficiency_ci, skewness_test, marginal_effects, efficiency, meanefficiency, simulation_se, TIC, vuong, lcsfm_homogeneity, spec_test, spec_test_all, sfma, influence_sfa, hscore, hscore_select, calibrate_c, density_weights, pcomposed, dcomposed, data_gen_p, data_gen_cs, summary.sfareg, print.sfareg, psfm_bootstrap)
 
 import("methods")
 import("plm") # import whole package
@@ -22,7 +22,8 @@ importFrom("stats", "coef",         "dnorm",          "dt",      "integrate", "l
                     "as.formula",   "complete.cases", "formula", "sd",        "runif",
                     "ave",          "cor",            "terms",   "lm.fit",
                     "plogis",       "rbinom",         "rgamma",  "rlnorm",    "rweibull",
-                    "dlnorm",        "fitted",         "residuals", "optimize")
+                    "dlnorm",        "dweibull",      "qlnorm",    "qweibull",
+                    "fitted",        "residuals",     "optimize")
 S3method(summary, sfareg)
 S3method(print, sfareg)
 S3method(coef, sfareg)
@@ -39,3 +40,34 @@ S3method(residuals, npsfareg)
 S3method(nobs, npsfareg)
 S3method(plot, sfareg)
 S3method(print, sfadiag)
+S3method(print, sfa_vuong)
+S3method(print, sfa_mlrt)
+S3method(print, sfa_spec_test)
+S3method(print, sfa_spec_grid)
+S3method(print, sfma)
+S3method(print, sfa_influence)
+S3method(print, sfa_hscore)
+
+## Delayed registration: `sandwich` is in Suggests, not Imports, so the
+## generics do not exist at load time. The `pkg::generic` form registers these
+## only once sandwich is loaded, which is what makes dispatch work in an
+## INSTALLED package. Without it the methods are defined but unreachable --
+## sandwich::estfun() on an "sfareg" fit failed with "no applicable method"
+## while devtools::load_all() masked the problem by exporting everything.
+S3method(sandwich::bread, sfareg)
+S3method(sandwich::estfun, sfareg)
+S3method(texreg::extract, sfareg)
+export(inefficiency_test)
+export(pcomposed_model)
+export(composed_cdf)
+export(gof_test)
+export(cw_test)
+S3method(print,cw_test)
+export(uhet_test)
+export(esfm)
+export(symmetry_test)
+S3method(print,esfm)
+export(moment_range)
+S3method(print,sfa_moment_range)
+export(endogeneity_test)
+S3method(print,sfa_endog_test)

@@ -5,14 +5,16 @@
   CLIP_Z2_UPPER  =   8,
   CLIP_Z2_LOWER  = -37,
   HALTON_DISCARD =  1000,
+  ## Where sfm()'s NE branch stops forming eps^2/(2 sigma_v^2) and the tilt
+  ## separately and uses their analytic difference instead. Above z ~ 30,
+  ## log Phi(z) is within 1e-197 of zero, so the two forms agree to machine
+  ## precision; below it the tilt form is the accurate one.
+  NE_TILT_SWITCH = 30,
   MIN_POSITIVE   = .Machine$double.eps,
+  LOG_SQRT_2PI   = 0.918938533204672741780329736406,
   MAX_VALUE      = .Machine$double.xmax,
-  # Safe upper bound for arguments passed to exp() -- exp(700) ~= 1.01e304,
-  # comfortably under .Machine$double.xmax (~1.80e308), so clipping an
-  # exponent argument here prevents exp() from overflowing to Inf while
-  # still preserving its relative ordering for any argument that wouldn't
-  # have overflowed anyway. Added to fix a real "non-finite value supplied
-  # by optim" error reported from ttsfm(model_name="TTNE") -- see ttsfm.R.
+  ## Safe upper bound for arguments passed to exp() -- exp(700) ~= 1.01e304,
+  ## comfortably under .Machine$double.xmax (~1.80e308).
   EXP_CLIP_UPPER =  700
   # HALTON_PRIMES = c(2, 3)
 )
@@ -44,24 +46,12 @@ data_proc2 <- function(data, data_x, fancy_vars, fancy_vars_z, data_z, y_var,
       R <- ceiling(sqrt(nrow(data))) + 100
     } ## Integral reps
 
-    R_H <- randtoolbox::halton(R + 1000, 2, start = 1, normal = FALSE)[-c(1:1000), c(1:2)]
-    R_H <- cbind(qnorm(R_H[, 1]), sqrt(2) * pracma::erfinv(R_H[, 2])) ## using inverse error function for R_H2
-
-    if (!is.null(rand.gtre)) {
-      .rng_state <- .rng_snapshot()
-      on.exit(.rng_restore(.rng_state), add = TRUE)
-      set.seed(rand.gtre)
-    }
-
-    mat <- matrix(0, nrow = R, ncol = 9999)
-    for (v in 1:9999) {
-      mat[, v] <- sample(R_H[, 1])
-    }
-
-    cor_vec <- abs(cor(mat, R_H[, 2]))
-
-    R_H <- cbind(mat[, which.min(cor_vec)], R_H[, 2])
-    rm(cor_vec, v, mat)
+    ## One INDEPENDENT block of draws per firm, and randomization by shift
+    ## rather than by permutation. See .gtre_halton_draws() for why both
+    ## changed (gaps J1 and J2). R_H is kept for the returned object, which
+    ## reports the draws actually used; it is now firm 1's block.
+    draw_list <- .gtre_halton_draws(N = N, R = R, rand.gtre = rand.gtre)
+    R_H <- draw_list[[1L]]
 
     # print(paste( "Primes 2 and 3 are in use, with 1,000 discards.  Correlation between R and H draws is:", round(cor(R_H)[1,2],10), sep = "" ))
 
@@ -72,8 +62,12 @@ data_proc2 <- function(data, data_x, fancy_vars, fancy_vars_z, data_z, y_var,
     for (ii in seq_len(N)) {
       data_i[[ii]] <- data[which(data[, c(individual)] == indiv[ii]), ]
       t[ii] <- nrow(data_i[[ii]])
-      R_h1[[ii]] <- t(matrix(rep(R_H[, 1], t[[ii]]), R, t[[ii]]))
-      R_h2[[ii]] <- abs(t(matrix(rep(R_H[, 2], t[[ii]]), R, t[[ii]])))
+      ## Firm ii's own block. Within a firm the same draws are reused across
+      ## its periods -- correct, since the integral is over FIRM-level
+      ## components -- but across firms they are now different.
+      Di <- draw_list[[ii]]
+      R_h1[[ii]] <- t(matrix(rep(Di[, 1], t[[ii]]), R, t[[ii]]))
+      R_h2[[ii]] <- abs(t(matrix(rep(Di[, 2], t[[ii]]), R, t[[ii]])))
       Y[[ii]] <- matrix(rep(data_i[[ii]][, y_var], R), t[[ii]], R)
       data_i_vars[[ii]] <- as.matrix(data_i[[ii]][, c(x_vars_vec), drop = FALSE])
     }
@@ -104,16 +98,7 @@ data_proc <- function(formula, data, model_name, individual = NULL, inefdec) {
   data_orig <- data
 
   ## Formula parsing via .parse_pipe_formula() (matrix_utils.R), which uses
-  ## Formula::Formula() -- see that function's header comment for why this
-  ## replaced a manual strsplit(as.character(formula),"|") + paste()
-  ## reconstruction that used to live here (it silently misparsed long
-  ## formulas). `form_parts` is kept as a synthetic placeholder purely so
-  ## the `length(unlist(form_parts)) > 3` / `> 4` part-count checks used by
-  ## this function's callers (sfm.R, zsfm.R, ttsfm.R, psfm.R) and further
-  ## down in this function keep working unchanged -- nothing anywhere reads
-  ## its actual content, only its unlisted length (1 RHS part -> length 3,
-  ## 2 parts -> length 4, 3 parts -> length 5, matching the old object's
-  ## shape).
+  ## Formula::Formula().
   parsed_f <- .parse_pipe_formula(formula)
   formula_x <- parsed_f$formula_x
   y_var <- parsed_f$y_var
@@ -331,6 +316,7 @@ summary.sfareg <- function(object, ...) {
     cat("log likelihood:", -object$opt$value, "\n")
   }
   .sfa_report_convergence(object)
+  .sfa_report_boundary(object)
   ## return original object
   invisible(object)
 }
@@ -347,11 +333,51 @@ print.sfareg <- function(x, ...) {
     cat("log likelihood:", -x$opt$value, "\n")
   }
   .sfa_report_convergence(x)
+  .sfa_report_boundary(x)
+}
+
+## A variance scale sitting on the zero boundary, shown by both print() and
+## summary().
+##
+## The condition is already warned about at fit time, but a warning is a
+## one-off: it does not survive saveRDS(), a fresh session, or a loop that
+## suppressed warnings to keep the console readable. What people look at
+## afterwards is the printed table, and there a collapsed scale appears as an
+## ordinary coefficient of 0.0009 with nothing to say it is a boundary
+## solution, that the split it belongs to is unidentified in this sample, or
+## that the intercept moved to absorb the difference. So the flags the fit
+## already carries are reported here too.
+.sfa_report_boundary <- function(x) {
+  if (isTRUE(x$sigma_u_at_bound)) {
+    cat("NOTE: sigma_u is on the zero boundary")
+    if (isTRUE(x$wrong_skew)) cat(" and the OLS residuals have the wrong skew")
+    cat(".\n  Under wrong skewness this is the correct MLE, not a failure ",
+      "(Waldman 1982);\n  see ?skewness_test for a p-value.\n", sep = "")
+  }
+  ## tHN reports the same condition under its own name, and for its own reason:
+  ## heavy-tailed noise can absorb the whole one-sided component, so this is not
+  ## the wrong-skew story and must not cite it.
+  if (isTRUE(x$thn_sigma_u_at_bound)) {
+    cat("NOTE: sigma_u is on the zero boundary, so this fit reports essentially",
+      " no\n  inefficiency and the efficiency scores are uninformative. Heavy-",
+      "tailed\n  noise absorbing the one-sided component is a known property of",
+      " tHN,\n  not necessarily a numerical failure. See ?sfm.\n", sep = "")
+  }
+  if (isTRUE(x$sigh_at_bound) || isTRUE(x$sigr_at_bound)) {
+    gone <- if (isTRUE(x$sigh_at_bound)) "sigh" else "sigr"
+    kept <- if (isTRUE(x$sigh_at_bound)) "sigr" else "sigh"
+    cat("NOTE: ", gone, " is on the zero boundary, so the two persistent",
+      " components\n  have merged: ", kept, " has absorbed its variance and the",
+      " intercept has\n  absorbed its mean. Frequently the correct MLE rather",
+      " than a failure --\n  read the persistent scales together, and treat",
+      " both the split and any\n  level from coef() as unidentified in this",
+      " sample. See ?psfm.\n", sep = "")
+  }
+  invisible(NULL)
 }
 
 ## One line on how the optimizer finished, shown by both print() and
-## summary(). Previously neither said anything at all: a fit that stopped on
-## the iteration cap looked exactly like a converged one.
+## summary().
 .sfa_report_convergence <- function(x) {
   cc <- x$opt$convergence
   if (is.null(cc) || !length(cc) || is.na(cc)) {
@@ -366,14 +392,14 @@ print.sfareg <- function(x, ...) {
         "10" = "Nelder-Mead simplex degenerated",
         "51" = "L-BFGS-B warning",
         "52" = "L-BFGS-B error",
+        "99" = "final optim() polish stage did not produce a usable result; the preceding stage's estimates are reported",
         "see ?optim for this code"
       ), "\n",
       sep = ""
     )
     if (!is.null(x$opt$message)) cat("  optimizer message: ", x$opt$message, "\n", sep = "")
     ## A non-zero code frequently means only that the final polish stage could
-    ## not improve on an already-converged point; the gradient and Hessian are
-    ## what settle it, and sfa_diagnostics() combines all three.
+    ## not improve on an already-converged point.
     cat("  a non-zero code does not by itself mean the fit failed --\n")
     cat("  run sfa_diagnostics() on this fit to see the gradient and Hessian.\n")
   }

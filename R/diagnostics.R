@@ -1,22 +1,6 @@
-## ---------------------------------------------------------------------------
 ## Optimizer diagnostics.
-##
-## The numerical hardening (staged minimizer, clipping constants, analytic
-## gradients where they exist) is in place, but nothing was reported back: a
-## fit carried optim()'s convergence code, message, evaluation counts and
-## numerically differentiated Hessian, and print()/summary() showed none of it.
-## This file is the reporting half.
-##
-## Everything here works from what an ordinary fit already stores. The one
-## exception is the likelihood slice and the gradient, which need the objective
-## itself -- fit with `keep_objective = TRUE` to enable those.
-## ---------------------------------------------------------------------------
 
-## Hessian of the NEGATIVE log-likelihood, as optim() returns it. At a genuine
-## interior minimum of the negative log-likelihood this is positive definite;
-## a non-positive eigenvalue means the point is not a minimum in that
-## direction, and a tiny one means the likelihood is nearly flat along it,
-## which is what weak identification looks like numerically.
+## Hessian of the NEGATIVE log-likelihood, as optim() returns it.
 .sfa_hess_diag <- function(H, pnames) {
   if (is.null(H) || !is.matrix(H) || any(!is.finite(H))) {
     return(NULL)
@@ -45,12 +29,8 @@
   if (is.null(V) || nrow(V) < 2) {
     return(NULL)
   }
-  ## A near-singular Hessian -- exactly the condition this diagnostic exists to
-  ## report -- often leaves one or two parameters with a non-finite or
-  ## non-positive variance. Dropping the whole diagnostic then loses it
-  ## precisely when it is most wanted, so drop only the unusable parameters and
-  ## report the correlations among the rest, naming what was set aside. A row
-  ## carrying a non-finite entry is dropped with its (symmetric) column.
+  ## A near-singular Hessian -- exactly the condition this diagnostic exists
+  ## to report.
   v <- diag(V)
   keep <- is.finite(v) & v > 0 &
     vapply(seq_len(nrow(V)), function(i) all(is.finite(V[i, ])), logical(1))
@@ -86,15 +66,14 @@ sfa_diagnostics <- function(object, ...) {
   code <- if (!is.null(opt$convergence)) opt$convergence else NA_integer_
   conv <- list(
     code = code,
-    ## optim()'s documented codes. 1 is the one that matters in practice:
-    ## it means the iteration limit was hit, i.e. the reported answer is
-    ## wherever the search happened to be, not a converged optimum.
+    ## optim()'s documented codes.
     meaning = switch(as.character(code),
       "0" = "converged",
       "1" = "ITERATION LIMIT REACHED -- not a converged optimum",
       "10" = "Nelder-Mead simplex degenerated",
       "51" = "L-BFGS-B warning",
       "52" = "L-BFGS-B ERROR",
+      "99" = "final optim() polish stage did not produce a usable result -- preceding stage's estimates reported",
       if (is.na(code)) "no optimizer output (moment-based or FE estimator)" else "unknown code"
     ),
     message = if (!is.null(opt$message)) opt$message else NA_character_,
@@ -119,28 +98,17 @@ sfa_diagnostics <- function(object, ...) {
     }
   }
 
-  ## ---- actionable flags -----------------------------------------------
-  ## The convergence code on its own is NOT diagnostic, and treating it as
-  ## such would cry wolf on ordinary fits. Measured over NHN/NE/NTN at
-  ## n = 150/500/1500: code 52 ("ABNORMAL_TERMINATION_IN_LNSRCH") turns up
-  ## routinely alongside a max relative gradient of ~1e-6 and a positive
-  ## definite Hessian -- the staged minimizer had already found the optimum
-  ## and L-BFGS-B cannot take a step from it. The same code on NTN at n = 150
-  ## came with a relative gradient of 5e+07 and an indefinite Hessian, which
-  ## is a real failure. What separates them is the gradient and the Hessian,
-  ## so the verdict uses those and reports the code as context.
+  ## ---- actionable flags ----------------------------------------------- The
+  ## convergence code on its own is NOT diagnostic.
   flags <- character(0)
   hess_ok <- !is.null(hess) && hess$pos_def
   grad_ok <- !is.null(grad) && grad$max_rel <= 1e-3
 
-  ## Code 1 is the iteration limit: the search was still moving when it ran out
-  ## of budget, which no amount of curvature at the stopping point excuses. The
-  ## line-search codes (51/52) are the ones that are routinely benign.
+  ## Code 1 is the iteration limit: curvature at the stopping point cannot
+  ## show whether the search had actually finished.
   linesearch <- !is.na(code) && code %in% c(51L, 52L)
   benign <- linesearch && grad_ok && hess_ok
-  ## "benign" is a positive claim, so it requires positive evidence: without a
-  ## retained objective there is no gradient and the question stays open rather
-  ## than being resolved in the fit's favour.
+  ## "benign" is a positive claim, so it requires positive evidence.
   unverified <- !is.na(code) && code != 0 && !benign && is.null(grad) && linesearch
   conv$benign_nonzero <- benign
   conv$unverified_nonzero <- unverified
@@ -269,23 +237,7 @@ print.sfadiag <- function(x, ...) {
 }
 
 
-## ---------------------------------------------------------------------------
 ## Diagnostic plots.
-##
-##   1  Hessian eigenvalue spectrum, log scale. A long drop from the largest to
-##      the smallest is the visual signature of weak identification.
-##   2  Parameter correlation, as a shaded matrix.
-##   3  Likelihood SLICE for each parameter: the log-likelihood with that
-##      parameter varied and the others HELD at their estimates. This is a
-##      slice, not a profile -- a profile would re-optimize the others at each
-##      point, which costs an optimization per grid point. A slice is the right
-##      object for reading curvature at the optimum, and it is what the maximum
-##      should sit at the top of; if the estimate is not at the peak of its own
-##      slice, the optimizer stopped early.
-##   4  Gradient by parameter, which should be ~0 at a converged optimum.
-##
-## Panels 3 and 4 need the objective (`keep_objective = TRUE`).
-## ---------------------------------------------------------------------------
 plot.sfareg <- function(x, which = 1:4, n_grid = 41, span = 0.25, ...) {
   d <- sfa_diagnostics(x)
   avail <- integer(0)

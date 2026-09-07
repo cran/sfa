@@ -35,6 +35,18 @@ plot(density(p.gtre_sml$H),main="Density of Persistent TE")
 total_te <- rep(p.gtre_sml$H, each=6) * p.gtre_sml$U
 plot(density(total_te),main="Density of Total TE")
 
+## ----setup_bnd----------------------------------------------------------------
+c(sigh_at_bound = p.gtre_sml$sigh_at_bound,
+  sigr_at_bound = p.gtre_sml$sigr_at_bound)
+
+## ----setup_sn-----------------------------------------------------------------
+sn_gtre <- function(sig_u, sig_v, sig_r, sig_h, T) {
+  k <- 1 - 2/pi
+  (sig_r^2 + sig_h^2 * k) / ((sig_u^2 * k + sig_v^2) / T)
+}
+# the fit above, read off its own estimates
+sn_gtre(sig_u = 0.3, sig_v = 0.1, sig_r = 0.1, sig_h = 0.3, T = 6)
+
 ## ----setup5-------------------------------------------------------------------
 coef(p.gtre_sml)                 # named vector of point estimates
 vcov(p.gtre_sml)                 # variance-covariance matrix (from the Hessian)

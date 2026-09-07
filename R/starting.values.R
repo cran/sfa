@@ -1,4 +1,4 @@
-start_cs <- function(formula_x, data_orig, x_vars_vec, intercept, model_name, n_x_vars, start_val, n_z_vars, z_vars) {
+start_cs <- function(formula_x, data_orig, x_vars_vec, intercept, model_name, n_x_vars, start_val, n_z_vars, z_vars, n_class = 1) {
   plm_lm <- lm(formula_x, data_orig)
   beta_hat <- if (isTRUE(intercept == 0)) {
     plm_lm$coefficients[x_vars_vec]
@@ -24,13 +24,7 @@ start_cs <- function(formula_x, data_orig, x_vars_vec, intercept, model_name, n_
   } else {
     unname(c(lambda, sigma, mu, beta_0, beta_hat))
   }
-  ## THT's third parameter is the degrees of freedom of the skew-t. Starting it
-  ## at 1 (Cauchy -- no mean, no variance) puts the optimizer in a region where
-  ## the model's moments do not exist and a long way from any plausible fit. Take
-  ## a moment start instead: the excess kurtosis of a t_nu is 6/(nu-4), so
-  ## nu ~ 4 + 6/kurtosis of the OLS residuals. Clipped to [3, 30] -- above ~30 the
-  ## skew-t is numerically indistinguishable from the skew-normal, so there is no
-  ## information left to move on, and the likelihood is flat.
+  ## THT's third parameter is the degrees of freedom of the skew-t.
   .exkurt <- mean((epsilon_hat - mean(epsilon_hat))^4) / stats::var(epsilon_hat)^2 - 3
   a_start <- if (is.finite(.exkurt) && .exkurt > 0.2) min(max(4 + 6 / .exkurt, 3), 30) else 10
   start_v_t <- if (is.na(beta_0_st)) {
@@ -50,26 +44,90 @@ start_cs <- function(formula_x, data_orig, x_vars_vec, intercept, model_name, n_
   } else {
     unname(c(sigma_v, sigma_u, 1, beta_0, beta_hat))
   }
-  start_v_nnak <- if (is.na(beta_0_st)) {
+  ## NNAK starts from the method of moments, not from the constants above.
+  .moment_start <- local({
+    mm <- tryCatch(stats::model.matrix(plm_lm), error = function(e) NULL)
+    yy <- tryCatch(stats::model.response(stats::model.frame(plm_lm)),
+                   error = function(e) NULL)
+    if (is.null(mm) || is.null(yy)) {
+      NULL
+    } else {
+      cf <- tryCatch(.cols_fit(yy, mm, "NHN", intercept_col = NA), error = function(e) NULL)
+      if (is.null(cf) || isTRUE(cf$wrong_skew) ||
+        !is.finite(cf$sigma_u) || !is.finite(cf$sigma_v) ||
+        cf$sigma_u <= 0 || cf$sigma_v <= 0) {
+        NULL
+      } else {
+        cf
+      }
+    }
+  })
+
+  ## TSL carries (sigma_v, sigma_u, lambda), and takes its scales from the
+  ## EXPONENTIAL moment inversion rather than the half-normal one used above.
+  .tsl_start <- local({
+    mm <- tryCatch(stats::model.matrix(plm_lm), error = function(e) NULL)
+    yy <- tryCatch(stats::model.response(stats::model.frame(plm_lm)),
+                   error = function(e) NULL)
+    if (is.null(mm) || is.null(yy)) {
+      NULL
+    } else {
+      cf <- tryCatch(.cols_fit(yy, mm, "NE", intercept_col = NA), error = function(e) NULL)
+      if (is.null(cf) || isTRUE(cf$wrong_skew) || !is.finite(cf$sigma_u) || cf$sigma_u <= 0) {
+        NULL
+      } else {
+        sv_tsl <- sqrt(max(abs(unname(cf$moments[["m2"]]) - cf$sigma_u^2),
+                           .SFA_CONSTANTS$MIN_POSITIVE))
+        list(sigma_u = cf$sigma_u, sigma_v = sv_tsl, eu = cf$eu)
+      }
+    }
+  })
+
+  start_v_tsl <- if (!is.null(.tsl_start)) {
+    if (is.na(beta_0_st)) {
+      unname(c(.tsl_start$sigma_v, .tsl_start$sigma_u, 1, beta_hat))
+    } else {
+      unname(c(.tsl_start$sigma_v, .tsl_start$sigma_u, 1,
+               beta_0_st + .tsl_start$eu, beta_hat))
+    }
+  } else if (is.na(beta_0_st)) {
+    unname(c(sigma_v, sigma_u, 1, beta_hat))
+  } else {
+    unname(c(sigma_v, sigma_u, 1, beta_0, beta_hat))
+  }
+
+  start_v_nnak <- if (!is.null(.moment_start)) {
+    ## Only the intercept moves; the OLS slopes are already consistent.
+    if (is.na(beta_0_st)) {
+      unname(c(.moment_start$sigma_v, .moment_start$sigma_u, 0.5, beta_hat))
+    } else {
+      unname(c(.moment_start$sigma_v, .moment_start$sigma_u, 0.5,
+               beta_0_st + .moment_start$eu, beta_hat))
+    }
+  } else if (is.na(beta_0_st)) {
     unname(c(sigma_v, sigma_u, 0.5, beta_hat))
   } else {
     unname(c(sigma_v, sigma_u, 0.5, beta_0, beta_hat))
   }
-  start_v_ne <- if (is.na(beta_0_st)) {
-    unname(c(sigma_v, sigma_u, beta_hat))
-  } else {
-    unname(c(sigma_v, sigma_u, beta_0, beta_hat))
-  }
+  ## NE is started from the bias-corrected moment estimator, not the flat 0.1
+  ## above; see R/ne_start.R.  Falls back to the flat start only if the
+  ## residuals are degenerate.
+  start_v_ne <- tryCatch(
+    .ne_start(epsilon_hat, beta_0_st, beta_hat, rule = "bc"),
+    error = function(e) {
+      if (is.na(beta_0_st)) {
+        unname(c(sigma_v, sigma_u, beta_hat))
+      } else {
+        unname(c(sigma_v, sigma_u, beta_0, beta_hat))
+      }
+    }
+  )
   start_v_nhn <- if (is.na(beta_0_st)) {
     unname(c(lambda, sigma, beta_hat))
   } else {
     unname(c(lambda, sigma, beta_0, beta_hat))
   }
-  ## NR is started from the Rayleigh moment equations, not the flat 0.1: from the
-  ## flat start it reached a WORSE point than the true parameters in 9 of 14
-  ## replications at n = 4000. .nr_start() returns NULL on wrongly skewed
-  ## residuals, where the moment equations have no admissible solution, and the
-  ## flat start is then used as before. See .nr_start() in matrix_utils.R.
+  ## NR is started from the Rayleigh moment equations, not the flat 0.1.
   .nr_mom <- .nr_start(epsilon_hat, beta_0_st, beta_hat)
   start_v_nr <- if (!is.null(.nr_mom)) {
     .nr_mom
@@ -94,6 +152,103 @@ start_cs <- function(formula_x, data_orig, x_vars_vec, intercept, model_name, n_
     out <- matrix(0, nrow = 3, ncol = length(start_v))
     colnames(out) <- c("sigma_v", c(names(plm_lm$coefficients)), z_vars)
     lower_bob <- c(.Machine$double.eps, rep(-.Machine$double.xmax^.1, length(start_v[-c(1)])))
+  }
+  ## LATENT CLASS. Unlike every other model here the parameter vector has no
+  ## fixed length: J blocks of (sigv, sigu, beta) followed by the (J-1) blocks
+  ## of multinomial-logit coefficients, class J being the reference.
+  ##
+  ## The starting values are NOT J perturbations of one fit. A finite mixture
+  ## whose components start identical sits at a saddle point of the likelihood
+  ## -- the posterior class probabilities are then equal for every observation
+  ## and the score with respect to the class split is zero -- so the classes
+  ## have to be separated before the optimizer is handed the problem. Splitting
+  ## the OLS residuals at their J-quantiles and refitting within each group is
+  ## the usual EM-style initialisation and costs one lm() per class. It also
+  ## makes the labelling reproducible rather than arbitrary: class 1 starts on
+  ## the lowest-residual group. See the note on label switching in ?zsfm.
+  ## LCM_CN: the CONTAMINATED NORMAL frontier. Every parameter is common
+  ## across components except the noise scale, so the layout is
+  ## [sigv_1..sigv_J, sigu, beta, logit], not one block per class. Start the
+  ## noise scales spread around the pooled one -- a contaminating component is
+  ## by definition the wider one -- and everything else at its pooled value.
+  if (identical(model_name, "LCM_CN")) {
+    .J <- max(2L, as.integer(n_class))
+    e_lc <- as.numeric(epsilon_hat)
+    s0 <- stats::sd(e_lc)
+    if (!is.finite(s0) || s0 <= 0) s0 <- 1
+    spread <- seq(0.6, 1.8, length.out = .J)
+    lam0 <- 1
+    sigv0 <- s0 / sqrt(1 + lam0^2) * spread
+    sigu0 <- s0 * lam0 / sqrt(1 + lam0^2)
+    b0 <- unname(plm_lm$coefficients)
+    b0[!is.finite(b0)] <- 0
+    start_v <- c(sigv0, sigu0, b0, rep(0, (.J - 1L)))
+    .bnames <- names(plm_lm$coefficients)
+    out <- matrix(0, nrow = 3, ncol = length(start_v))
+    colnames(out) <- c(
+      paste0("sigv_class", seq_len(.J)), "sigu", .bnames,
+      paste0("logit_(Intercept)_class", seq_len(.J - 1L))
+    )
+    lower_bob <- c(
+      rep(.Machine$double.eps, .J + 1L),
+      rep(-Inf, length(b0) + (.J - 1L))
+    )
+  }
+
+  if (model_name %in% c("LCM", "LCM_Z")) {
+    .J <- max(2L, as.integer(n_class))
+    X_lc <- stats::model.matrix(plm_lm)
+    e_lc <- as.numeric(epsilon_hat)
+    qs <- stats::quantile(e_lc, probs = seq(0, 1, length.out = .J + 1L), names = FALSE)
+    ## Ties in the residuals can collapse a break; jitter the interior breaks
+    ## apart rather than letting cut() drop a class.
+    qs <- sort(unique(qs))
+    grp <- if (length(qs) < .J + 1L) {
+      ## Degenerate residual distribution: fall back to an even split of the
+      ## ranks, which always yields J non-empty groups.
+      cut(rank(e_lc, ties.method = "first"),
+        breaks = .J, labels = FALSE, include.lowest = TRUE)
+    } else {
+      cut(e_lc, breaks = qs, labels = FALSE, include.lowest = TRUE)
+    }
+    ## One sigma per class from that class's own residual spread, split into
+    ## sigv/sigu by the pooled lambda so the two scales start on the same
+    ## footing as the single-class models.
+    .lam0 <- 1
+    .blocks <- lapply(seq_len(.J), function(j) {
+      ok <- which(grp == j)
+      b_j <- tryCatch(
+        stats::lm.fit(X_lc[ok, , drop = FALSE], plm_lm$model[[1L]][ok])$coefficients,
+        error = function(e) plm_lm$coefficients
+      )
+      b_j[!is.finite(b_j)] <- plm_lm$coefficients[!is.finite(b_j)]
+      s_j <- stats::sd(e_lc[ok])
+      if (!is.finite(s_j) || s_j <= 0) s_j <- max(stats::sd(e_lc), 1e-3)
+      c(s_j / sqrt(1 + .lam0^2), s_j * .lam0 / sqrt(1 + .lam0^2), unname(b_j))
+    })
+    ## Class J is the reference, so only J-1 blocks of logit coefficients are
+    ## free. They start at zero: equal prior class probabilities. The classes
+    ## are already separated by the beta blocks above, so this is not the
+    ## saddle point the identical-component start would be.
+    n_q <- if (model_name == "LCM") 1L else n_z_vars
+    start_v <- c(unlist(.blocks), rep(0, (.J - 1L) * n_q))
+    .bnames <- names(plm_lm$coefficients)
+    .qnames <- if (model_name == "LCM") "(Intercept)" else z_vars
+    out <- matrix(0, nrow = 3, ncol = length(start_v))
+    colnames(out) <- c(
+      unlist(lapply(seq_len(.J), function(j) {
+        paste0(c("sigv", "sigu", .bnames), "_class", j)
+      })),
+      unlist(lapply(seq_len(.J - 1L), function(j) {
+        paste0("logit_", .qnames, "_class", j)
+      }))
+    )
+    ## Positivity on the two scales of every block; the betas and the logit
+    ## coefficients are unrestricted.
+    lower_bob <- c(
+      rep(c(.Machine$double.eps, .Machine$double.eps, rep(-Inf, n_x_vars)), .J),
+      rep(-Inf, (.J - 1L) * n_q)
+    )
   }
   if (model_name %in% c("ZISF")) {
     start_v <- start_v_zisf
@@ -130,15 +285,8 @@ start_cs <- function(formula_x, data_orig, x_vars_vec, intercept, model_name, n_
     colnames(out) <- c("sigv", "sigu", c(names(plm_lm$coefficients)))
     lower_bob <- c(rep(.Machine$double.eps, 2), rep(-Inf, n_x_vars))
   }
-  ## NU / NGE use residual-scaled starting values rather than the flat 0.1
-  ## the older models use. Both have a one-sided parameter measured on the
-  ## scale of the data (theta is the SUPPORT WIDTH of u for the uniform, and
-  ## sigma_u the exponential mean for the generalized exponential), so a fixed
-  ## 0.1 is a poor start whenever y is not O(1) -- residual dispersion gives
-  ## the optimizer a start of roughly the right magnitude on any scale.
-  ## Simulated-ML models. Third parameter is the lognormal meanlog (may be
-  ## negative, hence the -Inf lower bound) or the Weibull shape (strictly
-  ## positive, started at 1 = the exponential special case).
+  ## NU / NGE use residual-scaled starting values rather than the flat 0.1 the
+  ## older models use.
   if (model_name %in% c("NLN", "NW")) {
     s_eps <- stats::sd(epsilon_hat)
     sv_st <- max(0.5 * s_eps, 1e-3)
@@ -180,20 +328,15 @@ start_cs <- function(formula_x, data_orig, x_vars_vec, intercept, model_name, n_
     start_v <- start_v_t
     out <- matrix(0, nrow = 3, ncol = length(start_v))
     ## Order is (sigma_u, sigma_v), NOT (sigma_v, sigma_u): start_v_t above is
-    ## built as c(sigma_u, sigma_v, ...) and THT's likelihood in sfm.R reads
-    ## sig_u <- x[1]; sig_v <- x[2]. These labels used to be the other way round,
-    ## so every THT fit reported each scale parameter under the other's name.
-    ## Caught by the convergence sweep: the column labelled "sigv" converged to
-    ## the true sigma_u and vice versa.
+    ## built as c.
     colnames(out) <- c("sigu", "sigv", "a", c(names(plm_lm$coefficients)))
     ## 2.05 on the df for the same reason as in lower.start(): below 2 the
     ## skew-t has no variance, and below 1 no mean at all.
     lower_bob <- c(rep(.Machine$double.eps, 2), 2.05, rep(-Inf, n_x_vars))
   }
   if (model_name == "tHN") {
-    ## Residual-scaled starts, not the flat 0.1 the older models use: both scales
-    ## are measured in the units of y, so 0.1 is a poor start whenever y is not
-    ## O(1). Same reasoning as NU/NGE/NLN/NW above.
+    ## Residual-scaled starts, not the flat 0.1 the older models use: both
+    ## scales are measured in the units of y.
     s_eps <- stats::sd(epsilon_hat)
     sv_st <- max(0.5 * s_eps, 1e-3)
     su_st <- max(s_eps, 1e-3)
@@ -205,11 +348,7 @@ start_cs <- function(formula_x, data_orig, x_vars_vec, intercept, model_name, n_
     start_v <- start_v_thn
     out <- matrix(0, nrow = 3, ncol = length(start_v))
     ## Order is (sigma_v, sigma_u, nu) and MUST match sfm.R's tHN likelihood,
-    ## which reads sig_v <- x[1]; sig_u <- x[2]; nu <- x[3]. THT's labels were
-    ## once transposed relative to its likelihood, so every THT fit reported each
-    ## scale under the other name until a convergence sweep caught it; the
-    ## ordering here is asserted in tests/testthat/test-thn.R so that cannot
-    ## recur silently.
+    ## which reads sig_v <- x[1]; sig_u <- x[2]; nu <- x[3].
     colnames(out) <- c("sigv", "sigu", "nu", c(names(plm_lm$coefficients)))
     ## nu floor of 2.05: the t has no variance at nu <= 2, and the quadrature in
     ## .log_d_thn() is only validated down to 2.05.
@@ -219,6 +358,12 @@ start_cs <- function(formula_x, data_orig, x_vars_vec, intercept, model_name, n_
     start_v <- start_v_ng
     out <- matrix(0, nrow = 3, ncol = length(start_v))
     colnames(out) <- c("sigv", "sigu", "mu", c(names(plm_lm$coefficients)))
+    lower_bob <- c(rep(.Machine$double.eps, 3), rep(-Inf, n_x_vars))
+  }
+  if (model_name == "TSL") {
+    start_v <- start_v_tsl
+    out <- matrix(0, nrow = 3, ncol = length(start_v))
+    colnames(out) <- c("sigv", "sigu", "lambda", c(names(plm_lm$coefficients)))
     lower_bob <- c(rep(.Machine$double.eps, 3), rep(-Inf, n_x_vars))
   }
   if (model_name == "NNAK") {
@@ -243,14 +388,14 @@ start_cs <- function(formula_x, data_orig, x_vars_vec, intercept, model_name, n_
   results <- list(
     plm_lm, beta_hat, epsilon_hat, beta_0_st, sigma_u, sigma_v, mu,
     beta_0, lambda, sigma, start_v_ntn, start_v_ng, start_v_nnak,
-    start_v_t, start_v_ne, start_v_nr, start_v_nhn, start_v, out,
+    start_v_t, start_v_ne, start_v_nr, start_v_nhn, start_v_tsl, start_v, out,
     lower_bob
   )
 
   names(results) <- c(
     "plm_lm", "beta_hat", "epsilon_hat", "beta_0_st", "sigma_u", "sigma_v", "mu",
     "beta_0", "lambda", "sigma", "start_v_ntn", "start_v_ng", "start_v_nnak",
-    "start_v_t", "start_v_ne", "start_v_nr", "start_v_nhn", "start_v", "out",
+    "start_v_t", "start_v_ne", "start_v_nr", "start_v_nhn", "start_v_tsl", "start_v", "out",
     "lower_bob"
   )
 
@@ -262,6 +407,7 @@ start_panel <- function(formula_x, data, model_name, start_val, intercept, x_var
   sfa_eps <- sfa_alp <- exp_eta <- exp_u <- sigma_v <- sigma_u <-
     sigma_r <- sigma_h <- beta_0 <- lambda <- sigma <- start_v <- out <-
     plm_gtre <- beta_hat <- alpha_hat <- epsilon_hat <- beta_0_st <- beta_se <- NULL
+  beta_se_named <- NULL
 
   plm_tfe <- plm_fd <- NULL
 
@@ -270,42 +416,34 @@ start_panel <- function(formula_x, data, model_name, start_val, intercept, x_var
       plm_tfe <- plm(formula_x, data, effect = "individual", model = "within")
       plm_fd <- plm(formula_x, data, effect = "individual", model = "pooling")
     } else {
-      ## Guard the random-effects starting-value regression against a rank-deficient
-      ## BETWEEN-individual design (see .check_collinearity() in matrix_utils.R for
-      ## why the pooled design can be full rank while this one is not). Without
-      ## this, plm fails inside its error-components step with an uninterpretable
-      ## solve(crossprod(ZBeta)) LAPACK error, or -- worse -- silently returns a
-      ## garbage inverse and therefore meaningless starting values.
-      ## `collinear_chk` is supplied by psfm() when the between-individual design
-      ## is rank deficient AND the user chose "start_only" (the default): the
-      ## requested formula is still what gets estimated, but the offending columns
-      ## are removed from THIS starting-value regression only. psfm() has already
-      ## dealt with the "error" and "warn_drop" cases before calling us.
+      ## Guard the random-effects starting-value regression against a
+      ## rank-deficient BETWEEN-individual design. The reduction happens at
+      ## COLUMN granularity (see .re_start_design): dropping whole terms cannot
+      ## express "keep 13 of factor(year)'s 24 dummies", so it left the singular
+      ## design untouched and plm::ercomp() then failed in solve().
       formula_start <- formula_x
+      data_start <- data
+      start_map <- NULL
       if (!is.null(collinear_chk) && length(collinear_chk$between_drop)) {
-        warning(.collinearity_message(collinear_chk, "start_only"), call. = FALSE)
-        keep_terms <- setdiff(
-          attr(stats::terms(formula_x), "term.labels"),
-          .terms_for_columns(formula_x, data, collinear_chk$between_drop)
-        )
-        formula_start <- stats::reformulate(if (length(keep_terms)) keep_terms else "1",
-          response = all.vars(formula_x)[1]
-        )
+        if (!isTRUE(collinear_chk$already_warned)) {
+          warning(.collinearity_message(collinear_chk, "start_only"), call. = FALSE)
+        }
+        rd <- .re_start_design(formula_x, data, collinear_chk$between_drop)
+        if (!is.null(rd)) {
+          formula_start <- rd$formula
+          data_start <- rd$data
+          start_map <- rd$map
+        }
       }
 
-      plm_gtre <- plm(formula_start, data, effect = "individual", model = "random")
+      plm_gtre <- plm(formula_start, data_start, effect = "individual", model = "random")
       beta_hat_raw <- if (isTRUE(intercept == 0)) {
-        plm(formula_start, data, effect = "individual")$coefficients
+        plm(formula_start, data_start, effect = "individual")$coefficients
       } else {
         plm_gtre$coefficients[-c(1)]
       }
-      ## Re-expand to the FULL requested coefficient vector, filling any column the
-      ## starting-value regression could not identify with its pooled OLS estimate
-      ## (a strictly better start than zero, and available at no extra cost).
-      ## NOTE the target name set must match what the ORIGINAL code produced:
-      ## x_vars_vec carries "(Intercept)" as its first entry, but the non-zero
-      ## -intercept branch drops it via [-1]. Expanding to the wrong set makes
-      ## start_v one element too long and blows up on colnames(out) downstream.
+      if (!is.null(start_map)) beta_hat_raw <- .remap_start_names(beta_hat_raw, start_map)
+      ## Re-expand to the FULL requested coefficient vector.
       beta_target <- if (isTRUE(intercept == 0)) x_vars_vec else x_vars_vec[x_vars_vec != "(Intercept)"]
       beta_hat <- .expand_start_beta(beta_hat_raw, beta_target, formula_x, data)
       alpha_hat <- ranef(plm_gtre)
@@ -316,6 +454,12 @@ start_panel <- function(formula_x, data, model_name, start_val, intercept, x_var
         plm_gtre$coefficients[c(1)]
       }
       beta_se <- as.data.frame(summary(plm_gtre)[1])$coefficients.Std..Error
+      ## Named copy, so SEQ1/SEQ2 can align SEs to the REQUESTED columns even
+      ## when the starting-value regression was reduced.
+      beta_se_named <- stats::setNames(
+        summary(plm_gtre)$coefficients[, 2], rownames(summary(plm_gtre)$coefficients)
+      )
+      if (!is.null(start_map)) beta_se_named <- .remap_start_names(beta_se_named, start_map)
     }
   }
 
@@ -324,24 +468,8 @@ start_panel <- function(formula_x, data, model_name, start_val, intercept, x_var
   }
 
   if (isFALSE(is.numeric(start_val)) & model_name %in% c("TRE_Z", "GTRE_Z", "TRE", "GTRE", "GTRE_FML", "GTRE_SEQ1", "GTRE_SEQ2")) {
-    ## Variance components for the starting values come from the SAME sequential
-    ## decomposition that psfm(model_name = "GTRE_SEQ1") reports: fit an
-    ## intercept-only normal/half-normal to the composite residuals (giving
-    ## sigma_v, sigma_u) and another to the individual effects (giving sigma_r,
-    ## sigma_h).
-    ##
-    ## This replaces pcs_c(), which did the same decomposition but seeded its own
-    ## optimizer with runif() draws. That made every GTRE-family starting value
-    ## partly RANDOM: two identical calls on identical data began from different
-    ## points, so run time and occasionally the optimum itself varied for no
-    ## modelled reason. .fit_nhn_intercept() is deterministic, starts from
-    ## sd(y)/sqrt(2) rather than a random draw, and runs the same staged
-    ## optimizer the rest of the package uses.
-    ##
-    ## It also returns (sigma_v, sigma_u) DIRECTLY rather than as a
-    ## lambda/sigma pair needing inversion, so the algebra that used to convert
-    ## back -- sigma_v = sqrt(sigma^2/(1+lambda^2)), sigma_u = lambda*sigma_v --
-    ## is gone along with its opportunity for error.
+    ## Variance components for the starting values come from the SAME
+    ## sequential decomposition that psfm(model_name = "GTRE_SEQ1") reports.
     fit_eps_st <- .fit_nhn_intercept(as.numeric(epsilon_hat))
     fit_alp_st <- .fit_nhn_intercept(as.numeric(alpha_hat))
     sigma_v <- fit_eps_st$par[1]
@@ -386,30 +514,21 @@ start_panel <- function(formula_x, data, model_name, start_val, intercept, x_var
   results <- list(
     sfa_eps, sfa_alp, exp_eta, exp_u, sigma_v, sigma_u, sigma_r,
     sigma_h, beta_0, lambda, sigma, start_v, out,
-    plm_gtre, beta_hat, alpha_hat, epsilon_hat, beta_0_st, beta_se,
+    plm_gtre, beta_hat, alpha_hat, epsilon_hat, beta_0_st, beta_se, beta_se_named,
     plm_tfe, plm_fd
   )
 
   names(results) <- c(
     "sfa_eps", "sfa_alp", "exp_eta", "exp_u", "sigma_v", "sigma_u", "sigma_r",
     "sigma_h", "beta_0", "lambda", "sigma", "start_v", "out",
-    "plm_gtre", "beta_hat", "alpha_hat", "epsilon_hat", "beta_0_st", "beta_se",
+    "plm_gtre", "beta_hat", "alpha_hat", "epsilon_hat", "beta_0_st", "beta_se", "beta_se_named",
     "plm_tfe", "plm_fd"
   )
   return(results)
 }
 
 start.tfe <- function(formula_x, data, model_name, start_val, intercept, x_vars_vec, gamma, individual, N, y_var, n_x_vars) {
-  ## `index = individual` is REQUIRED here and must not be dropped. By this
-  ## point `data` has been through data_proc2(), which returns a plain
-  ## data.frame -- the pdata.frame class (and with it the panel index) is gone,
-  ## even though the individual columns are still pseries. Called without an
-  ## explicit index, plm() falls back to treating the FIRST TWO COLUMNS as the
-  ## individual and time index. That silently consumed the response and the
-  ## first regressor, producing "empty model" (with a cryptic "'-' not
-  ## meaningful for factors" warning) for any data whose first two columns are
-  ## not the panel index. The bug was invisible for years because
-  ## data_gen_p() happens to put `name` and `year` first.
+  ## `index = individual` is REQUIRED here and must not be dropped.
   plm_tfe <- plm(formula_x, data, effect = "individual", model = "within", index = individual)
   if (isTRUE(is.numeric(start_val))) {
     start_v <- start_val
@@ -450,10 +569,7 @@ start.tfe <- function(formula_x, data, model_name, start_val, intercept, x_vars_
     Y[[ii]] <- .demean(as.numeric(data_i[[ii]][, y_var]))
     data_i_vars[[ii]] <- data.frame(data_i[[ii]][, c(x_vars_vec)])
     ## Precomputed once here (same treatment Y already got above) rather than
-    ## inside psfm.R's TFE like.tfe()/fn1(), which used to call demean() on
-    ## this same per-individual regressor data on EVERY likelihood evaluation
-    ## even though it doesn't depend on the parameter vector being optimized --
-    ## a pure waste recomputed thousands of times across bobyqa/psoptim/optim.
+    ## inside psfm.R's TFE like.tfe()/fn1().
     data_i_vars_dm[[ii]] <- as.matrix(.demean(data_i_vars[[ii]]))
     one_t[[ii]] <- rep(1, t[[ii]])
     I_t[[ii]] <- diag(t[[ii]])
@@ -488,22 +604,30 @@ lower.start <- function(start_v, model_name, differ) {
   if (model_name %in% c("NHN", "NE", "NR", "NTN", "NU", "NGE")) {
     lower1 <- c(rep(.0000001, 2), start_v[-c(1:2)] - differ)
   }
-  ## THT: the third parameter is degrees of freedom, not a scale. A lower bound
-  ## of 1e-7 lets the optimizer walk into df < 1, where the skew-t has no mean and
-  ## the efficiency predictor E[u|e] does not exist. Bound it at 2.05 so both the
-  ## mean and the variance of the composed error exist throughout the search.
+  ## THT: the third parameter is degrees of freedom, not a scale.
   if (model_name == "THT") {
     lower1 <- c(rep(.0000001, 2), 2.05, start_v[-c(1:3)] - differ)
   }
   if (model_name == "tHN") {
     lower1 <- c(rep(.0000001, 2), 2.05, start_v[-c(1:3)] - differ)
   }
-  if (model_name %in% c("NG", "NNAK", "NW")) {
+  if (model_name %in% c("NG", "NNAK", "NW", "TSL")) {
     lower1 <- c(rep(.0000001, 3), start_v[-c(1:3)] - differ)
   }
   ## NLN's third parameter is a meanlog and is genuinely unbounded below.
   if (model_name == "NLN") {
     lower1 <- c(rep(.0000001, 2), start_v[3] - differ, start_v[-c(1:3)] - differ)
+  }
+  ## LCM's layout is variable-length, so the positivity pattern is derived from
+  ## the block structure recorded on start_v rather than hard-coded by index.
+  ## .lcm_pos is attached by zsfm() when it builds the starting vector.
+  if (model_name %in% c("LCM", "LCM_Z")) {
+    pos <- attr(start_v, "lcm_pos")
+    if (is.null(pos)) {
+      stop("lower.start(): LCM start_v is missing its `lcm_pos` attribute.",
+        call. = FALSE)
+    }
+    lower1 <- ifelse(pos, .0000001, start_v - differ)
   }
   if (model_name %in% c("ZISF")) {
     lower1 <- c(start_v[1] - differ, rep(.0000001, 2), start_v[-c(1:3)] - differ)
@@ -514,30 +638,8 @@ lower.start <- function(start_v, model_name, differ) {
   if (model_name %in% c("NHN_Z", "NE_Z")) {
     lower1 <- c(rep(.0000001, 1), start_v[-c(1)] - differ)
   }
-  ## Two upper-bound vectors, because the optimizer stages need different things.
-  ##
-  ## `upper1` keeps the original trust region of +/- differ around the CURRENT
-  ## point for every parameter. psoptim REQUIRES finite bounds -- it errors with
-  ## "fixed bounds must be provided" otherwise -- so the particle swarm must use
-  ## this one.
-  ##
-  ## `upper1_open` relaxes the bound to Inf on the strictly-positive scale
-  ## parameters, and is for the final optim() stage, which handles Inf fine.
-  ## Applying a trust region to a variance parameter there is an outright trap:
-  ## the box is anchored to wherever the PREVIOUS stage happened to stop, so a
-  ## stage that drove sigma_v toward zero leaves the next one an upper bound of
-  ## 0 + differ, which it pins against and cannot escape.
-  ##
-  ## That is what broke NR. On identical data it reached log-likelihoods up to
-  ## 107 points BELOW NHN -- the same model by a different closed form -- and
-  ## returned sigma_v = 0.500 exactly (= 0 + differ) on 2 of 5 test seeds, with
-  ## its variance-parameter MSE flat in n. Opening the bound recovered 69 and 58
-  ## log-likelihood points on those seeds.
-  ##
-  ## The positions needing this are exactly those given a MIN_POSITIVE lower
-  ## bound above, so they are detected from lower1 rather than re-listed per
-  ## model, which keeps the two in step as models are added. Parameters with a
-  ## genuine two-sided range (NLN's meanlog, ZISF's gamma) keep the finite box.
+  ## Two upper-bound vectors, because the optimizer stages need different
+  ## things.
   is_pos <- abs(lower1 - .0000001) < 1e-12
   upper1 <- c(start_v + differ)
   upper1_open <- ifelse(is_pos, Inf, start_v + differ)

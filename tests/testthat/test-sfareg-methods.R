@@ -100,3 +100,34 @@ test_that("print() and summary() run without error and return invisibly", {
   expect_output(summary(fit))
   expect_invisible(print(fit))
 })
+
+test_that("vcov(type = \"bhhh\") is an alternative to the Hessian, not a copy of it", {
+  skip_on_cran()
+  set.seed(4)
+  n <- 400
+  x1 <- rnorm(n); x2 <- rnorm(n)
+  y <- 0.5 + 0.5 * x1 + 0.5 * x2 + rnorm(n, 0, 0.3) - abs(rnorm(n))
+  d <- data.frame(y, x1, x2)
+
+  f <- sfm(y ~ x1 + x2, model_name = "NHN", data = d, keep_objective = TRUE)
+  H <- vcov(f)
+  B <- vcov(f, type = "bhhh")
+
+  expect_equal(dim(B), dim(H))
+  expect_identical(dimnames(B), dimnames(H))
+  expect_true(all(diag(B) > 0))
+
+  ## Under correct specification the information-matrix equality holds, so the
+  ## two should agree closely without being identical. Both halves matter: far
+  ## apart would mean one of them is wrong, identical would mean `type` is
+  ## being ignored.
+  r <- sqrt(diag(B)) / sqrt(diag(H))
+  expect_true(all(r > 0.8 & r < 1.25))
+  expect_false(isTRUE(all.equal(B, H)))
+
+  ## BHHH is built from the scores, so it needs the retained objective.
+  g <- sfm(y ~ x1 + x2, model_name = "NHN", data = d)
+  expect_error(vcov(g, type = "bhhh"), "keep_objective")
+
+  expect_error(vcov(f, type = "nonsense"))
+})

@@ -2,7 +2,7 @@
 title: "Introduction to psfm"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{introduction to psfm}
+  %\VignetteIndexEntry{Introduction to psfm}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
@@ -26,8 +26,11 @@ library(sfa)
 
 `psfm()` is the panel-data entry point of the sfa package (`sfm()`,
 `zsfm()`, and `ttsfm()` are its cross-sectional counterparts -- see their
-own help pages, `?sfm`/`?zsfm`/`?ttsfm`). It fits one of eleven
-`model_name` choices, selected via the `model_name` argument:
+own help pages, `?sfm`/`?zsfm`/`?ttsfm`). It fits one of twenty-one
+`model_name` choices, selected via the `model_name` argument. The most
+commonly used are listed here; `?psfm` has the full list, including the
+classical panel estimators (`"CSS"`, `"LS"`, `"KSS"`, `"SSRE"`, `"SSCRE"`)
+added since this vignette was written:
 
 | `model_name` | Individual effect | Estimator | Notes |
 |---|---|---|---|
@@ -39,8 +42,18 @@ own help pages, `?sfm`/`?zsfm`/`?ttsfm`). It fits one of eleven
 | `"FD"` | random, persistent | first-differenced GLS (Wang & Ho 2010) | $\sigma_u$ time-invariant, scaled by covariates (1 pipe) |
 | `"GTRE_SEQ1"`, `"GTRE_SEQ2"` | random | sequential moment-based | fast, but not maximum likelihood |
 | `"SSFE"` | fixed | LSDV (Schmidt & Sickles 1984) | deterministic, no optimizer |
-| `"PL80"` | random, persistent | wraps `frontier::sfa()` | Pitt & Lee (1980) |
-| `"BC92"` | random, time-varying | wraps `frontier::sfa()` | Battese & Coelli (1992) |
+| `"PL80"` | random, persistent | ML, closed form | Pitt & Lee (1980) |
+| `"BC92"` | random, time-varying | ML, closed form | Battese & Coelli (1992) |
+| `"CSS"` | fixed, time-varying | firm-specific quadratic | Cornwell, Schmidt & Sickles (1990) |
+| `"LS"` | fixed, common time path | rank-one factor, ALS | Lee & Schmidt (1993) |
+| `"KSS"` | fixed, factor structure | factor model, rank chosen by IC | Kneip, Sickles & Song (2012) |
+| `"SSRE"`, `"SSCRE"` | random / correlated random | GLS, Mundlak means for `SSCRE` | Schmidt & Sickles (1984) |
+
+The last four assume no distribution for inefficiency at all -- they identify
+it from the firm effects rather than from a one-sided likelihood -- so they
+carry no `sigma_u` and report slopes only. They are the right comparison when
+you want to know how much of your efficiency ranking is coming from the
+half-normal assumption.
 
 Every model shares the same `formula`/`data`/`individual` calling
 convention, so switching between them is usually just a change of
@@ -74,6 +87,28 @@ work should use a genuine panel and the defaults -- `halton_num` alone
 defaults to `ceiling(sqrt(nrow(data))) + 100`, several times what is used
 here. Expect the numbers below to move if you rerun them at a realistic
 size.
+
+### Which estimator: `"fiml"` or `"sml"`
+
+`model_name = "GTRE"` names the *model*; `estimator` chooses how it is fitted.
+Since 1.1.4 the default is `"fiml"`, full-information maximum likelihood
+through the model's closed-skew-normal representation, which integrates the
+persistent block exactly and needs no draws at all. The fit below pins
+`estimator = "sml"` -- simulated maximum likelihood over Halton draws -- so
+that the `halton_num`/`rand.gtre` arguments have something to do.
+
+Which to use:
+
+- **`"fiml"`** is the default, is deterministic, and is several times faster.
+  It requires a **balanced** panel; on an unbalanced one `psfm()` warns and
+  falls back to `"sml"`.
+- **`"sml"`** handles unbalanced panels, and on the evidence of the package's
+  own benchmarks returns better technical-efficiency *scores* (see
+  `horserace/` in the development repository). It is the slower route.
+
+One consequence worth knowing: `psfm(model_name = "GTRE")` returns an object
+whose `$model_name` is `"GTRE_FML"` under the default. That is the name to
+use when you look it up in tables like the one above.
 
 ```{r setup2}
 data_trial <- data_gen_p(t=6, N=70, rand = 16, sig_u = 0.3, sig_v = 0.1, sig_r = 0.1, sig_h = 0.3, cons = 0.5, beta1 = 0.5, beta2 = 0.5)
@@ -139,6 +174,88 @@ balanced panel with t=6 for each individual. For an unbalanced panel, the
 each argument in rep would not work. Instead, use the times argument and a
 vector of length N (number of individuals), with each of the time period
 lengths, e.g. rep(c(2,5),times=c(5,2)).
+
+## When one of the persistent scales comes back as zero
+
+`GTRE` splits the time-invariant part of the error into two pieces: a
+symmetric firm random effect $r_i$ and a one-sided persistent inefficiency
+$h_i$. Only the *asymmetry* of $h$ distinguishes them, and in a fair share of
+samples the likelihood cannot do it and merges the two instead -- one scale
+goes to zero and the other absorbs its variation. `psfm()` reports this in
+`$sigh_at_bound` and `$sigr_at_bound`, warns at fit time, and repeats it in
+`print()`/`summary()`:
+
+```{r setup_bnd}
+c(sigh_at_bound = p.gtre_sml$sigh_at_bound,
+  sigr_at_bound = p.gtre_sml$sigr_at_bound)
+```
+
+**This is usually the correct answer, not a failed fit.** On one simulated
+replication the boundary solution had a log-likelihood *higher than the true
+parameter vector* by 3.66 -- a likelihood ratio of about 39. It is the panel
+counterpart of cross-sectional wrong skewness (Waldman 1982), where
+$\sigma_u = 0$ is the maximum likelihood estimate rather than an optimizer
+failure. So `psfm()` reports it instead of preventing it: bounding either
+scale away from zero would corrupt exactly the samples where the boundary is
+the answer.
+
+It is also common. On simulated panels with both components genuinely
+present, one of the two collapses in something like a quarter to a third of
+samples at moderate $N$ and $T$, falling as the panel widens.
+
+What to do when it happens:
+
+1. **Read the two persistent scales together, not separately.** Their *sum*
+   is still informative; the division between them is not identified in that
+   sample.
+2. **Treat the intercept with the same caution.** The frontier intercept and
+   the mean of persistent inefficiency are the same nuisance, since
+   $E[y] = \beta_0 - E[h] - E[u]$, so a collapse displaces $\beta_0$ by
+   about $E[h] = \sigma_h\sqrt{2/\pi}$. Any *level* read off `coef()` moves
+   with it. Slopes are unaffected.
+3. **Do not bootstrap that fit.** `psfm_bootstrap()` resamples from the
+   *fitted* model, so it would draw from a world in which the collapsed
+   component is absent, and the bootstrap is inconsistent on the boundary of
+   the parameter space regardless. It warns rather than proceeding quietly.
+4. **Do not simply refit with more draws until the zero goes away.** It is
+   tempting, and it is a selection rule: retrying in one direction only, and
+   stopping when you like the answer, biases the reported estimate away from
+   a boundary that is often correct. If you want to know whether a particular
+   collapse is simulation noise, fit the same data with
+   `estimator = "fiml"`, which uses no draws at all -- if that also lands on
+   the boundary, the boundary is the maximum.
+5. **What actually helps is a wider panel**, and how much more firms help
+   than periods depends on the estimator; `?psfm` gives the measured
+   elasticities for both.
+
+You can tell in advance whether a panel can support the split at all. The
+quantity that governs it is *not* $\sigma_h/\sigma_r$ -- raising that only
+decides which of the two scales dies. It is the persistent variance in the
+firm means relative to the transient variance still contaminating them:
+
+$$ S/N \;=\; \frac{\sigma_r^2 + \sigma_h^2(1-2/\pi)}{\left[\sigma_u^2(1-2/\pi) + \sigma_v^2\right]/T} $$
+
+```{r setup_sn}
+sn_gtre <- function(sig_u, sig_v, sig_r, sig_h, T) {
+  k <- 1 - 2/pi
+  (sig_r^2 + sig_h^2 * k) / ((sig_u^2 * k + sig_v^2) / T)
+}
+# the fit above, read off its own estimates
+sn_gtre(sig_u = 0.3, sig_v = 0.1, sig_r = 0.1, sig_h = 0.3, T = 6)
+```
+
+Across six simulated designs varying all four scales, this ordered the
+collapse rate perfectly (Spearman $-1$, both estimators): 54% of fits merged
+at $S/N = 0.67$, 31% at $1.30$, and 6% at $11.7$. **Below about 1, expect
+roughly half your fits to merge the two components; it takes something like
+$S/N > 5$ to get under 10%.** Note that $T$ is in the denominator, so a longer
+panel raises it directly.
+
+A quick check on your own data, before fitting anything: average the OLS
+residuals within each firm and look at their skew. A production frontier
+implies it should be negative. When it comes out positive the sample carries
+no between-firm evidence of persistent inefficiency, and that single statistic
+predicts which samples lose $\sigma_h$ with an ROC area of 0.955.
 
 ## Extracting results: standard R modeling generics
 
@@ -208,10 +325,16 @@ theory. `psfm_bootstrap()` offers a parametric-bootstrap alternative:
 starting from a fitted model, it repeatedly (a) simulates a new response
 from the fitted parameters (using each model's own assumed data-generating
 process), (b) re-estimates the same model on the simulated data, and (c)
-uses the spread of those re-estimates as the standard error. This is
-supported for every maximum-likelihood model above except the
-`frontier::sfa()`-wrapped ones (`PL80`, `BC92`): `GTRE_Z`, `TRE_Z`, `GTRE`,
-`TRE`, `TFE`, and `FD`.
+uses the spread of those re-estimates as the standard error. It supports
+`GTRE_Z`, `TRE_Z`, `GTRE`, `GTRE_FML`, `TRE`, `TFE`, `TFE_WMLE` and `FD`.
+`PL80` and `BC92` are excluded because they do not expose the `$U`/`$H`
+efficiency structure the function reads, and the moment-based and LSDV
+estimators (`GTRE_SEQ1`, `GTRE_SEQ2`, `SSFE`) because they are not maximum
+likelihood.
+
+Note that `psfm(model_name = "GTRE")` returns an object whose `$model_name` is
+`"GTRE_FML"` under the default `estimator = "fiml"`, which is why both names
+appear in that list.
 
 ```{r setup7}
 data_trial_tre <- data_gen_p(t=5, N=30, rand=16, sig_u=0.3, sig_v=0.1, sig_r=0.1, sig_h=0.3,
@@ -264,3 +387,18 @@ themselves, not just the parameters).
   than silently ignoring extra pipes or extra covariates.
 - **`individual`**: the panel ID column name (a character string, e.g.
   `"name"` above), required by every model in this vignette.
+- **Robust and clustered standard errors** come from the `sandwich` package
+  once the fit is made with `keep_objective = TRUE`:
+  `sandwich::sandwich(fit)` for Huber--White, `sandwich::vcovCL(fit, cluster =
+  d$firm)` for clustered, either of which `lmtest::coeftest()` accepts.
+  `sandwich::vcovHC()` does *not* work and is not meant to -- its
+  finite-sample corrections are built from hat values, which are not defined
+  for a nonlinear likelihood whose parameters include variance components.
+- **Other things worth knowing about**, each with its own help page:
+  `marginal_effects()` for how a covariate moves inefficiency in the `_Z`
+  models, `efficiency_ci()` for Horrace--Schmidt intervals around the
+  efficiency scores rather than point predictions, and `skewness_test()` for
+  a p-value on cross-sectional wrong skewness. That last one applies to
+  `sfm()` fits; it is *not* valid on between-firm residuals, because the firm
+  mean carries $-\bar u_i$ as well as $-h_i$ and the mean of $T$ half-normals
+  is skewed the same way.

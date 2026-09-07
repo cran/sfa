@@ -1,35 +1,40 @@
-## ------------------------------------------------------------
 ## S3 methods for class "sfareg"
-##
-## psfm(), sfm(), zsfm(), and ttsfm() all return objects of class
-## "sfareg", but previously only print.sfareg() and summary.sfareg()
-## existed (see data.processing.R). Users had to reach into
-## object$coefficients / object$opt by hand for anything else. These
-## add the standard R modeling generics so sfareg objects behave like
-## other model objects (coef(fit), logLik(fit), AIC(fit), BIC(fit),
-## vcov(fit)).
-##
-## Sign convention: every estimator in this package minimizes its
-## objective function (bobyqa/psoptim/optim all minimize by default;
-## see opts.R, which does not flip the sign of the user-supplied fn),
-## and each fn is written to return the NEGATIVE summed
-## log-likelihood -- so logLik = -object$opt$value. This matches
-## print.sfareg()/summary.sfareg(), which already display
-## -object$opt$value as "log likelihood".
-##
-## psfm()'s GTRE_SEQ1/GTRE_SEQ2 branches are moment-based (not MLE)
-## and carry no $opt component at all; logLik/AIC/BIC are undefined
-## for those fits and will return NA with a warning rather than
-## erroring.
-## ------------------------------------------------------------
 
 coef.sfareg <- function(object, ...) {
   object$coefficients
 }
 
-vcov.sfareg <- function(object, ...) {
+vcov.sfareg <- function(object, type = c("hessian", "bhhh"), ...) {
+  type <- match.arg(type)
   p <- length(object$coefficients)
   nm <- names(object$coefficients)
+
+  ## BHHH: the inverse of the outer product of the per-observation scores.
+  ## Worth having because it needs no Hessian at all -- it is defined whenever
+  ## the scores are, which is exactly the case the default path fails on. When
+  ## the Hessian is singular vcov() currently falls back to a DIAGONAL
+  ## approximation, discarding every covariance; BHHH keeps them.
+  ##
+  ## It is only as good as the information-matrix equality, so it disagrees
+  ## with the Hessian under misspecification -- which is a feature when the two
+  ## are compared deliberately and a trap when they are not. Not the default.
+  if (identical(type, "bhhh")) {
+    G <- tryCatch(estfun.sfareg(object), error = function(e) NULL)
+    if (is.null(G)) {
+      stop("vcov(type = \"bhhh\"): the score matrix is unavailable for this ",
+        "fit. Refit with keep_objective = TRUE.",
+        call. = FALSE
+      )
+    }
+    V <- tryCatch(solve(crossprod(G)), error = function(e) NULL)
+    if (is.null(V)) {
+      stop("vcov(type = \"bhhh\"): the outer product of gradients is singular.",
+        call. = FALSE
+      )
+    }
+    dimnames(V) <- list(nm, nm)
+    return(V)
+  }
 
   if (!is.null(object$opt) && !is.null(object$opt$hessian)) {
     V <- tryCatch(solve(object$opt$hessian), error = function(e) NULL)
@@ -54,10 +59,7 @@ logLik.sfareg <- function(object, ...) {
   if (is.null(object$opt) || is.null(object$opt$value)) {
     warning("This fit has no stored optimizer output (e.g. psfm()'s GTRE_SEQ1/GTRE_SEQ2 are moment-based, not maximum likelihood), so logLik() is not defined for it.", call. = FALSE)
     ## Return a properly classed logLik carrying NA rather than a bare
-    ## NA_real_. stats::AIC()/BIC() read the "df" and "nobs" attributes off
-    ## whatever logLik() returns; given an unclassed NA they find no "df" and
-    ## silently produce numeric(0) instead of the documented NA -- a missing
-    ## value that disappears rather than propagating.
+    ## NA_real_.
     val <- NA_real_
     attr(val, "df") <- length(object$coefficients)
     attr(val, "nobs") <- nobs.sfareg(object)
@@ -72,19 +74,28 @@ logLik.sfareg <- function(object, ...) {
 }
 
 nobs.sfareg <- function(object, ...) {
+  ## Rows USED, not rows supplied. Re-evaluating the call (below) counts the
+  ## latter, so a fit on data with any missing value reported too many
+  ## observations and BIC() was computed against the wrong n.
+  if (!is.null(object$nobs) && is.finite(object$nobs)) {
+    return(as.integer(object$nobs))
+  }
   if (!is.null(object$data)) {
     return(nrow(object$data))
   }
+  ## Failing an explicit count, any vector the fit stores one element of per
+  ## observation is exact where re-evaluating the call is not.
+  for (nm in c("exp_u_hat", "u_hat", "residuals", "med_u_hat")) {
+    v <- object[[nm]]
+    if (is.numeric(v) && length(v) > 0L) {
+      return(length(v))
+    }
+  }
+  if (is.numeric(object$u_posterior$mu_star)) {
+    return(length(object$u_posterior$mu_star))
+  }
   ## sfm()/zsfm()/ttsfm() do not store the data on the fitted object, so fall
   ## back to re-evaluating the `data` argument of the recorded call.
-  ##
-  ## It must be evaluated in the environment the model was FIT in, which is
-  ## captured on the formula, not in parent.frame(). parent.frame() here is
-  ## whoever happened to call nobs() -- fine from the console, where the data
-  ## is usually a global, but NA from inside any function whose caller cannot
-  ## see it. That silently propagated: BIC() needs the "nobs" attribute, so
-  ## BIC() on an sfm() fit returned NA whenever it was called from inside a
-  ## function, while AIC() (which needs only "df") kept working.
   dcall <- object$call$data
   if (is.null(dcall)) {
     return(NA_integer_)
@@ -104,28 +115,10 @@ nobs.sfareg <- function(object, ...) {
 }
 
 
-## ---------------------------------------------------------------------------
 ## predict() / fitted() / residuals() for "sfareg".
-##
-## These are the standard modelling generics `frontier` and `sfaR` provide and
-## sfa previously lacked. Two details make a generic implementation possible
-## across every model in the package:
-##
-##   * The frontier coefficients are always NAMED after the regressors, while
-##     the auxiliary parameters are not (lambda/sigma for NHN, sigv/sigu for
-##     NE, sigmaSq/gamma for PL80, and so on). Selecting coefficients by
-##     matching against the design-matrix column names therefore isolates
-##     beta without needing a per-model index table, which would otherwise
-##     have to be maintained in lock step with every new model.
-##   * Only the FIRST part of a pipe formula (y ~ x | z | zp) describes the
-##     frontier; the later parts parameterize variances. Prediction uses
-##     rhs = 1 only.
-## ---------------------------------------------------------------------------
 
-## Recover the data a fit was built from: explicit newdata wins, then the
-## copy some models store on the object, then the `data` argument of the
-## original call. Fails loudly rather than silently predicting from the
-## wrong frame.
+## Recover the data a fit was built from: explicit newdata wins, then the copy
+## some models store on the object.
 .sfa_data <- function(object, newdata = NULL) {
   if (!is.null(newdata)) {
     return(as.data.frame(newdata))
@@ -184,9 +177,7 @@ predict.sfareg <- function(object, newdata = NULL,
     return(z$xb)
   }
 
-  ## "response": the frontier shifted by predicted inefficiency, i.e. an
-  ## estimate of E[y | x] rather than of the frontier itself. Sign follows
-  ## the production/cost convention the model was fitted under.
+  ## "response": the frontier shifted by predicted inefficiency, i.e.
   u <- object$u_hat
   if (is.null(u) && !is.null(object$exp_u_hat)) u <- -log(pmax(object$exp_u_hat, .Machine$double.xmin))
   if (is.null(u)) {

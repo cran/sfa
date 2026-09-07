@@ -1,33 +1,4 @@
-## ---------------------------------------------------------------------------
 ## npsfm(): nonparametric stochastic frontier models
-##
-## Ported from Christopher Parmeter's research scripts (base code/Parmeter
-## codes/npsfm*.R). Those scripts were drafts: the dispatcher passed
-## unevaluated `match.call()` components where values were expected, several
-## branches referenced undefined objects, and the helper routines relied on
-## np's unexported internals. What is kept from them is the algebra and the
-## paper references; the plumbing is written against this package's own
-## conventions.
-##
-## Two estimators are implemented:
-##
-##   "FLW"  Fan, Li and Weersink (1996, JBES). Two steps. Fit E[y|x]
-##          nonparametrically, then recover the scale parameters from the
-##          residuals -- by maximizing Fan-Li-Weersink's concentrated
-##          likelihood in lambda for the half-normal case, or by inverting
-##          central moments for the exponential, gamma and uniform cases.
-##          sigma_u and sigma_v are constants; only the frontier is smooth.
-##
-##   "SVKZ" Simar, Van Keilegom and Zelenyuk (2017, JPA). Local method of
-##          moments. Three local-linear regressions -- y on x, then the
-##          squared and cubed residuals on x -- give sigma_u(x) and
-##          sigma_v(x) pointwise, so both variance components vary with the
-##          covariates. No optimizer runs.
-##
-## Both need kernel regression from the np package, which is in Suggests
-## rather than Imports: it is required only by this function, and 1.1.3
-## deliberately reduced the package's hard dependencies.
-## ---------------------------------------------------------------------------
 
 .npsfm_need_np <- function() {
   if (!requireNamespace("np", quietly = TRUE)) {
@@ -41,11 +12,7 @@
 }
 
 ## Fan, Li and Weersink's concentrated log-likelihood, their equation (14) and
-## the discussion beneath (15). sigma is profiled out of the problem as a
-## function of lambda, so only lambda is searched over.
-##
-## The original script maximized this with bbmle::mle2(). A one-dimensional
-## bounded search does the same job without the extra dependency.
+## the discussion beneath (15).
 .flw_neg_cll <- function(lambda, e) {
   if (!is.finite(lambda) || lambda <= 0) {
     return(.SFA_CONSTANTS$MAX_VALUE)
@@ -68,11 +35,7 @@
 }
 
 ## Kernel regression of ydat on xdat, returning fitted values, gradients and
-## residuals. Deliberately uses np's xdat/ydat interface rather than its
-## formula interface: the formula interface resolves `data` by non-standard
-## evaluation in the caller's frame, which is what made the original
-## FLW.fun() fail with "'data' must be a data.frame" when called from inside
-## another function.
+## residuals.
 .npsfm_kreg <- function(xdat, ydat, regtype, bw.sel, bw = NULL, nmulti = 1L) {
   if (is.null(bw)) {
     bws <- np::npregbw(
@@ -88,9 +51,7 @@
   }
   fit <- np::npreg(bws = bws, gradients = TRUE, residuals = TRUE)
   ## Namespace-qualify everything: np is only in Suggests, so it is not
-  ## attached when npsfm() runs. fitted()/residuals() are stats generics that
-  ## np provides methods for, but `gradients()` is np's OWN generic and is
-  ## invisible unless np is on the search path.
+  ## attached when npsfm() runs.
   list(
     bws = bws,
     fitted = as.numeric(stats::fitted(fit)),
@@ -100,9 +61,7 @@
 }
 
 
-## ---------------------------------------------------------------------------
 ## FLW: Fan, Li and Weersink (1996)
-## ---------------------------------------------------------------------------
 .npsfm_flw <- function(xdat, ydat, dist, regtype, bw.sel, bw, cost) {
   cost_sc <- if (cost) -1 else 1
   k <- .npsfm_kreg(
@@ -119,12 +78,7 @@
 
   if (dist == "hn") {
     ## Identification of sigma_u rests on the residuals being negatively
-    ## skewed. If they are not, the concentrated likelihood is maximized at
-    ## lambda -> 0 and sigma_u collapses to essentially zero. That is the
-    ## correct answer to the question asked, but it is silent, and the usual
-    ## cause is a misspecified orientation -- fitting production data with
-    ## cost = TRUE, or the reverse -- rather than a genuinely efficient
-    ## sample. Say so.
+    ## skewed.
     if (m3 >= 0) {
       warning("FLW: residuals are not negatively skewed (third moment ",
         signif(m3, 3), "), so sigma_u is not identified and will be ",
@@ -195,9 +149,7 @@
 }
 
 
-## ---------------------------------------------------------------------------
 ## SVKZ: Simar, Van Keilegom and Zelenyuk (2017)
-## ---------------------------------------------------------------------------
 .npsfm_svkz <- function(xdat, ydat, bw.sel, cost) {
   cost_sc <- if (cost) -1 else 1
   yy <- cost_sc * ydat
@@ -211,8 +163,6 @@
   r3 <- .npsfm_kreg(xdat = xdat, ydat = e1^3, regtype = "ll", bw.sel = bw.sel)
 
   ## SVKZ (3.5): sigma_u(x)^3 = sqrt(pi/2) * (pi/(pi-4)) * r3(x).
-  ## pi/(pi-4) is negative, so a correctly signed (negative) r3 gives a
-  ## positive cube. Wrong-skew points are floored at zero by (3.7).
   sigu3 <- sqrt(pi / 2) * (pi / (pi - 4)) * r3$fitted
   wrong_skew <- sigu3 <= 0
   sigma_u <- pmax(sigu3, 0)^(1 / 3)
@@ -223,11 +173,7 @@
   ## (3.2)/(3.9): mean correction E[u|x] = sqrt(2/pi) sigma_u(x)
   mu <- sqrt(2 / pi) * sigma_u
 
-  ## Gradient of the correction, by the chain rule through (3.5):
-  ##   d sigma_u/dx = (1/3) * sigu3^(-2/3) * d(sigu3)/dx
-  ## The source script wrote b3hat^(-2/3) here, which differs from
-  ## sigu3^(-2/3) * b3hat except in the degenerate case, and is dimensionally
-  ## wrong once x has more than one column.
+  ## Gradient of the correction, by the chain rule through (3.5).
   dsigu3 <- sqrt(pi / 2) * (pi / (pi - 4)) * r3$grad
   scale_g <- (1 / 3) * ifelse(wrong_skew, 0, pmax(sigu3, .SFA_CONSTANTS$MIN_POSITIVE)^(-2 / 3))
   sigma_u_grad <- dsigu3 * scale_g
@@ -247,9 +193,7 @@
 }
 
 
-## ---------------------------------------------------------------------------
 ## User-facing entry point
-## ---------------------------------------------------------------------------
 npsfm <- function(formula, data, method = c("FLW", "SVKZ", "PSZ", "KPST", "MY", "SZ"),
                   dist = c("hn", "exp", "gamma", "unif"),
                   regtype = c("lc", "ll"), bw.sel = c("cv.ls", "cv.aic"),
@@ -260,9 +204,7 @@ npsfm <- function(formula, data, method = c("FLW", "SVKZ", "PSZ", "KPST", "MY", 
   .npsfm_need_np()
 
   ## np prints "Multistart 1 of 1" progress from every bandwidth search, which
-  ## floods the console when npsfm() is called in a loop (a Monte Carlo sweep,
-  ## for instance). Silence it for the duration of the call unless the user
-  ## asked for progress, and restore whatever they had set.
+  ## floods the console when npsfm() is called in a loop.
   old_np_msg <- getOption("np.messages")
   options(np.messages = isTRUE(verbose))
   on.exit(options(np.messages = old_np_msg), add = TRUE)
@@ -288,8 +230,7 @@ npsfm <- function(formula, data, method = c("FLW", "SVKZ", "PSZ", "KPST", "MY", 
   cl <- match.call()
 
   ## The frontier is the first pipe segment; npsfm() has no variance
-  ## determinants of its own, so any further segments are an error rather
-  ## than something to be silently dropped.
+  ## determinants of its own.
   parsed <- .parse_pipe_formula(formula)
   if (!is.null(parsed$formula_z)) {
     stop("npsfm() takes a single-part formula (y ~ x1 + x2). ",
@@ -361,11 +302,7 @@ npsfm <- function(formula, data, method = c("FLW", "SVKZ", "PSZ", "KPST", "MY", 
 }
 
 
-## ---------------------------------------------------------------------------
-## Methods. "npsfareg" is deliberately a separate class from "sfareg": there
-## is no parameter vector with standard errors here, so coef()/vcov()/logLik()
-## have nothing to return and it would be misleading to inherit them.
-## ---------------------------------------------------------------------------
+## Methods.
 print.npsfareg <- function(x, ...) {
   cat("Nonparametric stochastic frontier model\n")
   cat("Method:       ", x$method,
@@ -426,14 +363,7 @@ residuals.npsfareg <- function(object, ...) object$residuals
 nobs.npsfareg <- function(object, ...) object$nobs
 
 
-## ---------------------------------------------------------------------------
 ## Kernel weights, for the local-likelihood estimators below.
-##
-## The source scripts obtained these with np::npksum(). Computing the Gaussian
-## product kernel directly is equivalent, transparent, and avoids depending on
-## npksum's argument conventions -- np is still used for bandwidth selection,
-## which is the part worth borrowing.
-## ---------------------------------------------------------------------------
 .npsfm_kw <- function(xm, j, bw) {
   z <- sweep(xm, 2L, xm[j, ], "-")
   z <- sweep(z, 2L, bw, "/")
@@ -453,18 +383,7 @@ nobs.npsfareg <- function(object, ...) object$nobs
 }
 
 
-## ---------------------------------------------------------------------------
 ## PSZ / KPST: Park, Simar and Zelenyuk. Local maximum likelihood.
-##
-## At each evaluation point the frontier and BOTH variance components are
-## given local-linear expansions, the latter on the log scale so they stay
-## positive:
-##   r(w)             ~ r0 + (w - w_j)'r1
-##   log sigma_v^2(w) ~ a0 + (w - w_j)'a1
-##   log sigma_u^2(w) ~ b0 + (w - w_j)'b1
-## and the kernel-weighted normal-half normal log-likelihood is maximized in
-## those 3q parameters, once per evaluation point.
-## ---------------------------------------------------------------------------
 .psz_nll <- function(par, yv, wm, K, q) {
   r0 <- par[1]
   r1 <- par[2:q]
@@ -542,13 +461,7 @@ nobs.npsfareg <- function(object, ...) object$nobs
   sigma_u <- sqrt(exp(pmin(par_store[, 2L * q + 1L], .SFA_CONSTANTS$EXP_CLIP_UPPER)))
   mu <- sqrt(2 / pi) * sigma_u
 
-  ## NO mean correction here. The local objective is the normal-half normal
-  ## COMPOSED-ERROR likelihood, in which e = y - r0 - (w-w_j)'r1 is eps = v-u
-  ## with E[eps] = -E[u] rather than a mean-zero residual. r0 is therefore
-  ## already the frontier m(w_j); adding sqrt(2/pi)*sigma_u on top of it
-  ## biases the whole frontier up by about E[u]. (FLW is different: its first
-  ## stage is a least-squares kernel regression, which does estimate E[y|x],
-  ## so there the shift is required.)
+  ## NO mean correction here.
   frontier <- cost_sc * par_store[, 1L]
   frontier_grad <- cost_sc * par_store[, 2:q, drop = FALSE]
 
@@ -564,14 +477,7 @@ nobs.npsfareg <- function(object, ...) object$nobs
 }
 
 
-## ---------------------------------------------------------------------------
 ## MY: Martins-Filho and Yao. Iterative local likelihood.
-##
-## Alternates between (i) a local-linear fit of the frontier at every
-## evaluation point, holding (lambda, sigma) fixed, and (ii) a global update
-## of (lambda, sigma) from the resulting residuals, until the scale parameters
-## stop moving. Step (i) is n optimizations, so the cost is n * iterations.
-## ---------------------------------------------------------------------------
 .my_local_nll <- function(par, yv, wm, K, lambda, sigma) {
   e <- yv - par[1] - as.numeric(wm %*% par[-1])
   val <- sum(.lnhn(e, lambda, sigma) * K)
@@ -611,8 +517,7 @@ nobs.npsfareg <- function(object, ...) object$nobs
   ab <- cbind(cost_sc * seed$frontier, cost_sc * seed$frontier_grad)
 
   ## Precompute the kernel weights and centred designs once; they do not
-  ## change across iterations, and recomputing them was most of the cost of
-  ## the original script.
+  ## change across iterations.
   Klist <- vector("list", n)
   Wlist <- vector("list", n)
   for (j in seq_len(n)) {
@@ -674,27 +579,40 @@ nobs.npsfareg <- function(object, ...) object$nobs
 }
 
 
-## ---------------------------------------------------------------------------
-## SZ: Simar and Zelenyuk (2011). DEA monotonization of a prior fit.
-##
-## Takes an already-estimated nonparametric frontier and passes its fitted
-## values through an output-oriented DEA, which imposes monotonicity and (under
-## "vrs"/"crs") convexity that the kernel fit does not guarantee. Needs
-## Benchmarking::dea.
-##
-## The source script for this one did not parse -- SZ.fun was missing its
-## opening brace, so its body was a lone warning() call and everything after
-## it ran at file scope. It also referred to `...` without having it in the
-## formals and to an undefined `dist`.
-## ---------------------------------------------------------------------------
-.npsfm_sz <- function(xdat, ydat, bw.sel, bw, cost, rts, prior.fit, log.form) {
-  if (!requireNamespace("Benchmarking", quietly = TRUE)) {
-    stop("method = \"SZ\" requires the 'Benchmarking' package for its DEA step, ",
+## Output-oriented DEA envelopment, solved one linear program per unit.
+.dea_out <- function(X, Y, rts = c("vrs", "crs", "drs", "irs")) {
+  rts <- match.arg(rts)
+  if (!requireNamespace("lpSolve", quietly = TRUE)) {
+    stop("method = \"SZ\" needs the 'lpSolve' package for its DEA step, ",
       "which is not installed. ",
-      'Install it with install.packages("Benchmarking").',
+      'Install it with install.packages("lpSolve").',
       call. = FALSE
     )
   }
+  X <- as.matrix(X)
+  Y <- as.matrix(Y)
+  n <- nrow(X)
+  k <- ncol(X)
+  m <- ncol(Y)
+
+  obj <- c(1, rep(0, n))
+  vapply(seq_len(n), function(o) {
+    con <- rbind(cbind(0, t(X)), cbind(-Y[o, ], t(Y)))
+    dir <- c(rep("<=", k), rep(">=", m))
+    rhs <- c(X[o, ], rep(0, m))
+    if (rts != "crs") {
+      con <- rbind(con, c(0, rep(1, n)))
+      dir <- c(dir, switch(rts, vrs = "=", drs = "<=", irs = ">="))
+      rhs <- c(rhs, 1)
+    }
+    sol <- lpSolve::lp("max", obj, con, dir, rhs)
+    if (!identical(sol$status, 0L)) NA_real_ else sol$solution[1]
+  }, numeric(1))
+}
+
+
+## SZ: Simar and Zelenyuk (2011). DEA monotonization of a prior fit.
+.npsfm_sz <- function(xdat, ydat, bw.sel, bw, cost, rts, prior.fit, log.form) {
   if (cost) {
     stop("method = \"SZ\" is implemented for production frontiers only ",
       "(cost = FALSE).",
@@ -720,9 +638,7 @@ nobs.npsfareg <- function(object, ...) object$nobs
   Y <- if (log.form) exp(prior.fit) else prior.fit
   X <- if (log.form) exp(as.matrix(xdat)) else as.matrix(xdat)
 
-  dea_fit <- Benchmarking::dea(X = X, Y = matrix(Y, ncol = 1L),
-                               RTS = rts, ORIENTATION = "out")
-  eff <- as.numeric(Benchmarking::eff(dea_fit))
+  eff <- .dea_out(X = X, Y = matrix(Y, ncol = 1L), rts = rts)
   dea_front <- Y * eff
 
   frontier <- if (log.form) log(dea_front) else dea_front

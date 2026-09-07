@@ -6,7 +6,7 @@
   \eqn{Y = \beta_0 + \beta_1 x_1 + \beta_2 x_2 + v - u}
   where \eqn{u \geq 0} and represents inefficiency.  All variants are produced so that the user can select those that they want.}
 \usage{data_gen_cs(N, rand, sig_u, sig_v, cons, beta1, beta2, a, mu, sig_w = sig_u,
-            shape_g = 2, m_nak = 1, mu_ln = -0.5, k_w = 1.5)}
+            shape_g = 2, m_nak = 1, mu_ln = -0.5, k_w = 1.5, lam_tsl = 1.5)}
 \arguments{
   \item{N}{A single integer specifying the number of observations (cross-sectional units).}
   \item{rand}{A single integer to set the seed for the random number generator, ensuring reproducibility.}
@@ -22,6 +22,7 @@
   \item{m_nak}{Nakagami shape \eqn{m} behind \code{y_pcs_nak}, which targets \code{sfm(model_name = "NNAK")}. The spread is \eqn{\Omega = \sigma_u^2}, so \eqn{\sigma_u} is the root-mean-square of \eqn{u}. The default \code{1} is the Rayleigh case; \code{0.5} would collapse the Nakagami onto the half-normal and so duplicate \code{y_pcs}.}
   \item{mu_ln}{Log-scale mean of the lognormal inefficiency draw behind \code{y_pcs_ln}, which targets \code{sfm(model_name = "NLN")}. The log-scale standard deviation is \code{sig_u}. The default \code{-0.5} with \code{sig_u = 1} gives \eqn{E[u] = 1}.}
   \item{k_w}{Weibull shape behind \code{y_pcs_wb}, which targets \code{sfm(model_name = "NW")}. The scale is \code{sig_u}.}
+  \item{lam_tsl}{Skew parameter \eqn{\lambda} behind \code{y_pcs_tsl}, which targets \code{sfm(model_name = "TSL")}. The scale is \code{sig_u}; \eqn{\lambda \to 0} recovers the exponential case.}
 }
 \details{
   The function simulates two explanatory variables, \eqn{x_1} and \eqn{x_2}, as transformations of uniform random variables.

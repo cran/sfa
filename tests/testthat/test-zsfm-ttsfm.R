@@ -149,3 +149,47 @@ test_that("the logit link does not overflow at a large linear predictor", {
   expect_equal(plogis(eta[2:4]), exp(eta[2:4])/(1+exp(eta[2:4])))
   expect_true(is.nan(exp(800)/(1+exp(800))))          ## the form it replaces
 })
+
+test_that("ZISF does not get trapped at the p -> 0 boundary", {
+  skip_on_cran()
+  skip_if(!nzchar(Sys.getenv("SFA_TEST_SLOW")),
+    "one n = 4000 ZISF fit; set SFA_TEST_SLOW")
+  ## P(fully efficient) = exp(-gamma), so gamma -> Inf is the boundary where the
+  ## mass point vanishes. That boundary carries its own local optimum, and on
+  ## the convergence design the default start fell into it on 1 replication in
+  ## 5000 -- seed 626 at n = 4000 returned gamma = 9.93 (p = 5e-5) with a
+  ## log-likelihood 188.7 points BELOW what any interior start reaches. One such
+  ## fit inflated that sample size's mean MSE 144-fold and flattened the whole
+  ## log-MSE-on-log-n slope to zero, which is what made gamma read as
+  ## non-convergent when four of five sample sizes were textbook.
+  d <- as.data.frame(data_gen_cs(N = 4000, rand = 626, sig_u = 1, sig_v = 0.3,
+    cons = 0.5, beta1 = 0.5, beta2 = 0.5, a = 5, mu = 0.1, m_nak = 1,
+    lam_tsl = 1.5))
+  f <- suppressWarnings(zsfm(y_zisf ~ x1 + x2, model_name = "ZISF", data = d))
+  expect_lt(unname(f$coefficients[["gamma"]]), 1)
+  expect_gt(as.numeric(logLik(f)), -2600)
+})
+
+test_that("the ZISF multistart leaves ZISF_Z alone", {
+  skip_on_cran()
+  ## ZISF_Z has no scalar gamma -- its layout is (sigv, sigu, beta, z-block)
+  ## and the mixing is parameterised through the z coefficients at the end, so
+  ## start_v[1] is sigma_v there. A multistart written for ZISF's layout and
+  ## applied to both would perturb the NOISE SCALE. Pinned because the two
+  ## models share an entry point and the layouts do not match.
+  ## Asserted on the FITTED object rather than by calling start_cs() directly:
+  ## the layout is what matters and the internal's argument list is not part of
+  ## any contract.
+  d <- as.data.frame(data_gen_cs(N = 800, rand = 2, sig_u = 1, sig_v = 0.3,
+    cons = 0.5, beta1 = 0.5, beta2 = 0.5, a = 5, mu = 0.1))
+  g <- suppressWarnings(zsfm(y_zisf_z ~ x1 + x2 | z, model_name = "ZISF_Z",
+    data = d))
+  expect_identical(unname(names(g$coefficients)[1:2]), c("sigv", "sigu"))
+  expect_gt(unname(g$coefficients[[1]]), 0)
+  ## ZISF, by contrast, leads with gamma -- the two layouts genuinely differ,
+  ## which is the whole reason the multistart is guarded by model_name.
+  d2 <- as.data.frame(data_gen_cs(N = 800, rand = 2, sig_u = 1, sig_v = 0.3,
+    cons = 0.5, beta1 = 0.5, beta2 = 0.5, a = 5, mu = 0.1))
+  h <- suppressWarnings(zsfm(y_zisf ~ x1 + x2, model_name = "ZISF", data = d2))
+  expect_identical(unname(names(h$coefficients)[1]), "gamma")
+})

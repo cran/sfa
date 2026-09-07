@@ -1,43 +1,5 @@
-## ---------------------------------------------------------------------------
-## Pitt and Lee (1981, JoE) Model III: the multivariate truncated normal
-## panel likelihood from their Appendix 2.
-##
-## The model is
-##     y_it = x_it'beta + u_it + v_it,      u_it <= 0 for all t,
-## with u_i = (u_i1, ..., u_iT)' drawn from a T-variate normal N(0, Sigma)
-## TRUNCATED to the negative orthant, and v_it iid N(0, sigma_v^2) independent
-## of u. Unlike the time-invariant Pitt-Lee model already in this package
-## (model_name = "PL80"), inefficiency here varies over time AND is correlated
-## across periods within a firm -- Sigma carries that dependence.
-##
-## Pitt and Lee derived this likelihood but did not use it, writing that it
-## "is difficult to evaluate since the quantities P0 and P(y_i - x_i beta)
-## involve T-dimensional numerical integrals", and estimating Model III by
-## Zellner SUR instead. Those integrals are orthant probabilities of a
-## multivariate normal, which mnormt::sadmvn() computes in about 3 ms at
-## T = 6 -- roughly 0.3 s per likelihood evaluation at N = 100.
-##
-## Derivation (their Appendix 2, completing the square in u):
-##   Q^{-1} = Sigma^{-1} + I/sigma_v^2,      mu_i = Q eps_i / sigma_v^2
-##   log f(eps_i) = -(T/2)log(2pi) - T log(sigma_v) - (1/2)log|Sigma|
-##                  + (1/2)log|Q| - log P0
-##                  - (1/2)( eps_i'eps_i/sigma_v^2 - eps_i'Q eps_i/sigma_v^4 )
-##                  + log P_i
-## where P0   = Pr(w <= 0) for w ~ N(0, Sigma)   -- the truncation constant,
-##       P_i  = Pr(w <= 0) for w ~ N(mu_i, Q).
-##
-## Sigma is parameterized as EQUICORRELATED, Sigma = sigma_u^2[(1-rho)I +
-## rho 11'], rather than left unrestricted. Unrestricted costs T(T+1)/2 free
-## parameters -- 21 at T = 6, 55 at T = 10 -- on top of beta and sigma_v, and
-## every one of them is identified only through orthant probabilities. The
-## equicorrelated form spends two parameters (sigma_u, rho) and captures the
-## thing the general Sigma was introduced for: dependence of a firm's
-## inefficiency across periods. rho = 0 gives independent-over-time
-## inefficiency; rho -> 1 approaches the time-invariant "PL80" case.
-##
-## Because the form is equicorrelated, every matrix quantity above is closed
-## form (Sherman-Morrison), so only the orthant probabilities are numerical.
-## ---------------------------------------------------------------------------
+## Pitt and Lee (1981, JoE) Model III: the multivariate truncated normal panel
+## likelihood from their Appendix 2.
 
 ## Pieces of the equicorrelated system. Returns NULL on an inadmissible
 ## parameter vector, which every caller treats as "return the penalty".
@@ -135,13 +97,8 @@
 }
 
 
-## ---------------------------------------------------------------------------
 ## Self-contained fitting routine, called from psfm() before the shared
-## start_panel() machinery. Kept separate because start_panel() dispatches on
-## model_name and has nothing to offer this likelihood: the parameters are
-## (sigma_v, sigma_u, rho, beta), and a pooled OLS supplies all the start
-## values it needs.
-## ---------------------------------------------------------------------------
+## start_panel() machinery.
 .psfm_pl_mvtn <- function(data, y_var, x_vars_vec, individual, inefdec_n,
                           maxit.optim, Method, optHessian, start_val,
                           verbose, call, formula) {
@@ -166,8 +123,7 @@
   }
 
   ## "(Intercept)" is a NAME in x_vars_vec, not a column of `data` -- the same
-  ## thing the GTRE_FML branch works around by setdiff()-ing it out. Build the
-  ## column explicitly rather than selecting one that does not exist.
+  ## thing the GTRE_FML branch works around by setdiff()-ing it out.
   xn <- x_vars_vec
   xcols <- setdiff(xn, "(Intercept)")
   Xall <- as.matrix(as.data.frame(data)[, xcols, drop = FALSE])
@@ -221,10 +177,7 @@
   out[3, ] <- out[1, ] / se
 
   ## E[u_it | eps_i] has no closed form here -- u is truncated multivariate
-  ## normal and the conditional mean is another T-dimensional integral. The
-  ## posterior mean of u given eps is reported instead from the Gaussian part,
-  ## floored at zero, which is exact when the truncation does not bind and a
-  ## reasonable approximation when it barely does.
+  ## normal and the conditional mean is another T-dimensional integral.
   pr <- .pl_mvtn_parts(opt$par[2], opt$par[3], opt$par[1], BigT)
   u_hat <- rep(NA_real_, length(Yall))
   if (!is.null(pr)) {

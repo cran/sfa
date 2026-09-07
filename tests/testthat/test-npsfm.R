@@ -196,7 +196,7 @@ test_that("non-half-normal distributions are refused by every method but FLW", {
 
 test_that("SZ monotonizes a prior fit and refuses cost frontiers", {
   skip_if_not_installed("np")
-  skip_if_not_installed("Benchmarking")
+  skip_if_not_installed("lpSolve")
   skip_on_cran()
   g <- np_data(60, seed = 9)
   expect_error(
